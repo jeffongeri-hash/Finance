@@ -899,3 +899,39 @@ a:hover { text-decoration: underline; }
   color: var(--red);
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
+
+/* ── Live trading form elements ─────────────────────────────────────────────── */
+
+.input-field {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.input-field:focus {
+  border-color: var(--blue);
+}
+
+.warning-box {
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: var(--radius-sm);
+  color: #fbbf24;
+  padding: 8px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+details > summary {
+  list-style: none;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}

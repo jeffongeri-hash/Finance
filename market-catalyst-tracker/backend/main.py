@@ -21,7 +21,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import INDICES, SECTORS, MOMENTUM_UNIVERSE, BIOTECH_TICKERS
+from config import (
+    INDICES, SECTORS, MOMENTUM_UNIVERSE, BIOTECH_TICKERS,
+    POLY_PRIVATE_KEY, POLY_FUNDER, POLY_HOST,
+)
 from data.nasdaq_adapter import (
     get_short_interest, get_macro_snapshot as nasdaq_macro_snapshot,
     get_ohlcv_history as nasdaq_ohlcv, get_status as nasdaq_status,
@@ -533,8 +536,14 @@ async def startup():
     asyncio.create_task(
         _stream.start_ticker(INDICES + SECTORS[:5], interval=20.0)
     )
-    # Create paper trading engine (auto-starts signal scanning on first /api/trading/start)
-    create_engine(initial_balance=10_000.0)
+    # Create trading engine — auto-enables live mode if credentials are set in .env
+    create_engine(
+        initial_balance = 10_000.0,
+        private_key     = POLY_PRIVATE_KEY,
+        funder          = POLY_FUNDER,
+        poly_host       = POLY_HOST,
+        live_mode       = bool(POLY_PRIVATE_KEY and POLY_FUNDER),
+    )
     # Start continuous backtester — runs every 30 min, results available immediately
     runner = create_backtest_runner(interval_s=1800)
     await runner.start()
@@ -609,6 +618,130 @@ async def trading_log():
     if not engine:
         return {"log": []}
     return {"log": engine.get_log()[-50:], "timestamp": int(time.time())}
+
+
+# ── Live Trading Routes ───────────────────────────────────────────────────────
+
+@app.get("/api/trading/live/status")
+async def live_status():
+    """
+    CLOB connection status and live mode health.
+    Returns whether live mode is active, USDC balance, and pending order count.
+    """
+    engine = get_engine()
+    if not engine:
+        return {"live_mode": False, "note": "Engine not initialised"}
+    health = await engine.live_health_check()
+    return {
+        "live_mode":       engine.live_mode,
+        "live_available":  engine._live is not None,
+        "live_error":      engine._live_error,
+        "clob":            health,
+        "timestamp":       int(time.time()),
+    }
+
+
+@app.post("/api/trading/live/enable")
+async def live_enable(
+    private_key: str = Query(..., description="Polygon wallet private key (0x…)"),
+    funder:      str = Query(..., description="Polymarket funder address (0x…)"),
+    host:        str = Query("https://clob.polymarket.com", description="CLOB host"),
+):
+    """
+    Switch the active trader to LiveTrader (real CLOB orders, real USDC).
+
+    ⚠ WARNING: After enabling live mode, all BUY/SELL calls will place real orders
+    on Polygon mainnet and spend real USDC. Verify position sizes and risk controls
+    before enabling.
+
+    The paper trader continues running as a shadow for comparison.
+    """
+    engine = get_engine()
+    if not engine:
+        raise HTTPException(status_code=503, detail="Engine not initialised. POST /api/trading/start first.")
+
+    result = engine.enable_live_mode(
+        private_key=private_key,
+        funder=funder,
+        host=host,
+    )
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    # Fetch initial balance from the chain
+    if engine._live:
+        await engine._live.refresh_balance()
+
+    return {
+        "live_mode":     engine.live_mode,
+        "balance_usdc":  engine._live.balance if engine._live else 0,
+        "funder_prefix": result.get("funder_prefix", funder[:10]),
+        "message":       "Live trading ENABLED — real USDC orders are now active",
+        "timestamp":     int(time.time()),
+    }
+
+
+@app.post("/api/trading/live/disable")
+async def live_disable():
+    """
+    Switch back to paper trading. Any open live orders remain open on the CLOB
+    and must be managed separately (or cancelled via /api/trading/live/cancel-all).
+    """
+    engine = get_engine()
+    if not engine:
+        raise HTTPException(status_code=503, detail="Engine not initialised")
+    result = engine.disable_live_mode()
+    return {
+        **result,
+        "live_mode": engine.live_mode,
+        "message":   "Switched back to paper trading",
+        "timestamp": int(time.time()),
+    }
+
+
+@app.get("/api/trading/live/balance")
+async def live_balance():
+    """Fetch real-time USDC balance from the Polymarket CLOB."""
+    engine = get_engine()
+    if not engine or not engine._live:
+        return {"balance_usdc": None, "note": "Live trader not initialised"}
+    usdc = await engine._live.refresh_balance()
+    return {
+        "balance_usdc":   round(usdc, 4),
+        "paper_balance":  round(engine._paper.balance, 2),
+        "timestamp":      int(time.time()),
+    }
+
+
+@app.get("/api/trading/live/orders")
+async def live_orders():
+    """Pending (unconfirmed) orders sitting on the Polymarket CLOB."""
+    engine = get_engine()
+    if not engine or not engine._live:
+        return {"orders": [], "count": 0, "note": "Live trader not initialised"}
+    orders = engine._live.get_pending_orders()
+    return {
+        "orders":    orders,
+        "count":     len(orders),
+        "timestamp": int(time.time()),
+    }
+
+
+@app.post("/api/trading/live/cancel-all")
+async def live_cancel_all():
+    """
+    Cancel all pending GTC orders on the CLOB and refund reserved balance.
+    Use this before switching to paper mode if you want a clean slate.
+    """
+    engine = get_engine()
+    if not engine or not engine._live:
+        raise HTTPException(status_code=503, detail="Live trader not initialised")
+    n = await engine._live.cancel_all_orders()
+    return {
+        "cancelled": n,
+        "message":   f"Cancelled {n} pending order(s)",
+        "timestamp": int(time.time()),
+    }
 
 
 # ── Backtester Routes ─────────────────────────────────────────────────────────

@@ -13,6 +13,18 @@ FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
 # Nasdaq Data Link (formerly Quandl) — enables FINRA short interest, EOD history, FRED macro
 NASDAQ_DATA_LINK_API_KEY: str = os.getenv("NASDAQ_DATA_LINK_API_KEY", "")
 
+# ── Polymarket CLOB live trading ───────────────────────────────────────────────
+# Required for live order execution (live_mode=True in TradingEngine).
+# Without these the engine runs in paper mode silently.
+#
+# POLY_PRIVATE_KEY : Polygon wallet private key (0x…)
+# POLY_FUNDER      : Polymarket-linked proxy wallet / funder address (0x…)
+#                    (shown in Polymarket UI under "Wallet")
+# POLY_HOST        : CLOB endpoint — override only for testnet/staging
+POLY_PRIVATE_KEY: str = os.getenv("POLY_PRIVATE_KEY", "")
+POLY_FUNDER:      str = os.getenv("POLY_FUNDER", "")
+POLY_HOST:        str = os.getenv("POLY_HOST", "https://clob.polymarket.com")
+
 # ── Market universe ────────────────────────────────────────────────────────────
 INDICES = ["SPY", "QQQ", "IWM", "DIA"]
 SECTORS = ["XLK", "XLV", "XLE", "XLF", "XLI", "XLY", "XLP", "XLU", "XLRE", "XLB", "XLC"]

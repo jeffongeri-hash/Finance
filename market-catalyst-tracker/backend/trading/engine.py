@@ -42,6 +42,7 @@ from trading.models import (
     MarketContext, MarketPhase, OrderSide, EngineState, SignalType,
 )
 from trading.paper_trader import PaperTrader
+from trading.live_trader import LiveTrader, create_live_trader
 from trading.signals import run_signal_scan
 from trading.penny_scanner import (
     scan_penny_markets, rank_opportunities, validate_portfolio_ev,
@@ -74,16 +75,25 @@ class TradingEngine:
         scan_interval_s:    int   = 60,      # re-scan every 60s
         settlement_poll_s:  int   = 5,       # check settlement every 5s
         live_mode:          bool  = False,   # False = paper trading only
-        private_key:        str   = "",      # for live mode (not yet active)
+        private_key:        str   = "",      # Polygon wallet private key
+        funder:             str   = "",      # Polymarket funder address
+        poly_host:          str   = "https://clob.polymarket.com",
     ):
-        self.trader           = PaperTrader(initial_balance)
+        # Paper trader always active (used as shadow in live mode)
+        self._paper = PaperTrader(initial_balance)
+        self._live:  Optional[LiveTrader] = None
+
+        # Active trader is paper by default; switch to live via enable_live_mode()
+        self.trader           = self._paper
+        self.live_mode        = False
+        self._live_error:     Optional[str] = None  # last live-mode init error
+
         self.max_position_pct = max_position_pct
         self.stop_loss_pct    = stop_loss_pct
         self.daily_loss_limit = daily_loss_limit
         self.min_confidence   = min_confidence
         self.scan_interval_s  = scan_interval_s
         self.settlement_poll_s= settlement_poll_s
-        self.live_mode        = live_mode
 
         self._running  = False
         self._tasks:   List[asyncio.Task] = []
@@ -92,9 +102,80 @@ class TradingEngine:
         self._log:     List[Dict] = []   # engine event log (last 200)
         self._day_start_balance = initial_balance
         self._day_start_ts      = time.time()
+
         # Penny harvest tracking
         self._penny_positions: Dict[str, Dict] = {}  # token_id → opportunity metadata
         self._penny_scan_ts:   float = 0.0
+
+        # Auto-enable live mode if credentials were passed at construction
+        if live_mode and private_key and funder:
+            err = self._try_init_live(private_key, funder, poly_host)
+            if err:
+                self._live_error = err
+                logger.warning("Engine started in PAPER mode (live init failed): %s", err)
+
+    # ── Live / Paper mode management ───────────────────────────────────────────
+
+    def _try_init_live(self, private_key: str, funder: str, host: str) -> Optional[str]:
+        """
+        Attempt to create a LiveTrader. Returns None on success, error string on failure.
+        Does NOT switch self.trader — caller decides whether to switch.
+        """
+        lt = create_live_trader(private_key, funder, host)
+        if lt is None:
+            return "py-clob-client not installed or credentials missing"
+        self._live = lt
+        return None
+
+    def enable_live_mode(
+        self,
+        private_key: str,
+        funder: str,
+        host: str = "https://clob.polymarket.com",
+    ) -> Dict:
+        """
+        Switch the active trader to LiveTrader.
+        Returns {"ok": True} or {"ok": False, "error": "..."}.
+        """
+        if not private_key or not funder:
+            return {"ok": False, "error": "POLY_PRIVATE_KEY and POLY_FUNDER are required"}
+
+        # Re-init live trader (allows rotating credentials at runtime)
+        err = self._try_init_live(private_key, funder, host)
+        if err:
+            self._live_error = err
+            return {"ok": False, "error": err}
+
+        self.trader    = self._live
+        self.live_mode = True
+        self._live_error = None
+        self._log_event(
+            "LIVE_MODE_ENABLED",
+            f"Switched to LiveTrader | funder={funder[:10]}… | host={host}"
+        )
+        logger.info("TradingEngine switched to LIVE mode")
+        return {"ok": True, "funder_prefix": funder[:10]}
+
+    def disable_live_mode(self) -> Dict:
+        """
+        Switch back to PaperTrader. The LiveTrader is kept in self._live
+        so it can be re-enabled without re-authenticating.
+        """
+        self.trader    = self._paper
+        self.live_mode = False
+        self._log_event("PAPER_MODE_ENABLED", "Switched back to PaperTrader")
+        logger.info("TradingEngine switched to PAPER mode")
+        return {"ok": True}
+
+    async def live_health_check(self) -> Dict:
+        """CLOB connectivity probe. Returns health dict from LiveTrader."""
+        if self._live is None:
+            return {
+                "connected":     False,
+                "note":          "LiveTrader not initialised — set POLY credentials first",
+                "error":         self._live_error,
+            }
+        return await self._live.health_check()
 
     # ── Control ────────────────────────────────────────────────────────────────
 
@@ -103,7 +184,11 @@ class TradingEngine:
         if self._running:
             return
         self._running = True
-        self._log_event("ENGINE_START", f"Balance: ${self.trader.balance:,.2f} | Mode: {'LIVE' if self.live_mode else 'PAPER'}")
+        mode_str = "LIVE" if self.live_mode else "PAPER"
+        self._log_event(
+            "ENGINE_START",
+            f"Balance: ${self.trader.balance:,.2f} | Mode: {mode_str}"
+        )
 
         self._tasks = [
             asyncio.create_task(self._scan_loop()),
@@ -445,19 +530,32 @@ class TradingEngine:
 
     def get_stats(self) -> Dict:
         penny_pos = list(self._penny_positions.values())
+
+        # Paper shadow stats (always available for comparison)
+        paper_stats = self._paper.stats() if self.live_mode else {}
+
+        # Pending CLOB orders (live mode only)
+        pending_orders: List[Dict] = []
+        if self.live_mode and self._live:
+            pending_orders = self._live.get_pending_orders()
+
         return {
             **self.trader.stats(),
-            "is_running":         self._running,
-            "live_mode":          self.live_mode,
-            "daily_pnl":          round(self._daily_pnl(), 2),
-            "active_signals":     len(self._signals),
-            "signals":            self._signals[:10],  # top 10 current signals
-            "event_log":          self._log[-30:],      # last 30 events
-            "open_markets":       list(self._markets.keys()),
-            "penny_positions":    penny_pos,
-            "penny_count":        len(penny_pos),
-            "penny_target":       PENNY_TARGET_POS,
+            "is_running":            self._running,
+            "live_mode":             self.live_mode,
+            "live_available":        self._live is not None,
+            "live_error":            self._live_error,
+            "daily_pnl":             round(self._daily_pnl(), 2),
+            "active_signals":        len(self._signals),
+            "signals":               self._signals[:10],
+            "event_log":             self._log[-30:],
+            "open_markets":          list(self._markets.keys()),
+            "penny_positions":       penny_pos,
+            "penny_count":           len(penny_pos),
+            "penny_target":          PENNY_TARGET_POS,
             "penny_capital_at_risk": round(sum(p.get("entry_price", 0.01) for p in penny_pos), 2),
+            "pending_live_orders":   pending_orders,
+            "paper_shadow":          paper_stats if self.live_mode else None,
         }
 
     def get_penny_positions(self) -> List[Dict]:
@@ -479,7 +577,19 @@ def get_engine() -> Optional[TradingEngine]:
     return _engine_instance
 
 
-def create_engine(initial_balance: float = 10_000.0, **kwargs) -> TradingEngine:
+def create_engine(
+    initial_balance: float = 10_000.0,
+    private_key:     str   = "",
+    funder:          str   = "",
+    poly_host:       str   = "https://clob.polymarket.com",
+    **kwargs,
+) -> TradingEngine:
     global _engine_instance
-    _engine_instance = TradingEngine(initial_balance=initial_balance, **kwargs)
+    _engine_instance = TradingEngine(
+        initial_balance=initial_balance,
+        private_key=private_key,
+        funder=funder,
+        poly_host=poly_host,
+        **kwargs,
+    )
     return _engine_instance

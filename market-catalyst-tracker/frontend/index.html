@@ -580,6 +580,23 @@
         </div>
       </div>
 
+      <!-- Live Mode Card -->
+      <div class="card" style="border:1px solid var(--border)">
+        <div class="card-header" style="margin-bottom:0">
+          <span class="card-title" style="display:flex;align-items:center;gap:8px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Live Order Execution
+          </span>
+          <span class="fs-11 text-muted">Polymarket CLOB via py-clob-client</span>
+        </div>
+        <!-- Card body injected by refreshLive() -->
+        <div id="live-mode-card" style="margin-top:10px">
+          <div class="loading-text">Loading CLOB status…</div>
+        </div>
+        <!-- Pending live orders (visible in live mode) -->
+        <div id="live-pending-orders" style="margin-top:12px"></div>
+      </div>
+
       <!-- Penny Harvest panel -->
       <div class="card">
         <div class="card-header">

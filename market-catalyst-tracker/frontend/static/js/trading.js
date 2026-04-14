@@ -17,19 +17,30 @@ import { API, Fmt, changeClass } from "/static/js/api.js";
 // ── API helpers ──────────────────────────────────────────────────────────────
 
 Object.assign(API, {
-  tradingStart:    () => API._post("/api/trading/start"),
-  tradingStop:     () => API._post("/api/trading/stop"),
-  tradingStats:    () => API._fetch("/api/trading/stats"),
-  tradingSignals:  () => API._fetch("/api/trading/signals"),
-  tradingLog:      () => API._fetch("/api/trading/log"),
-  nasdaqStatus:    () => API._fetch("/api/nasdaq/status"),
-  backtestStatus:  () => API._fetch("/api/backtest/status"),
-  backtestSummary: () => API._fetch("/api/backtest/summary"),
-  backtestResults: (strategy) => API._fetch("/api/backtest/results", strategy ? { strategy } : {}),
-  backtestRunNow:  () => API._post("/api/backtest/run"),
-  pennyScan:       (params = {}) => API._fetch("/api/penny/scan", params),
-  pennyEV:         (price) => API._fetch("/api/penny/ev", { price }),
-  pennyPositions:  () => API._fetch("/api/penny/positions"),
+  tradingStart:      () => API._post("/api/trading/start"),
+  tradingStop:       () => API._post("/api/trading/stop"),
+  tradingStats:      () => API._fetch("/api/trading/stats"),
+  tradingSignals:    () => API._fetch("/api/trading/signals"),
+  tradingLog:        () => API._fetch("/api/trading/log"),
+  nasdaqStatus:      () => API._fetch("/api/nasdaq/status"),
+  backtestStatus:    () => API._fetch("/api/backtest/status"),
+  backtestSummary:   () => API._fetch("/api/backtest/summary"),
+  backtestResults:   (strategy) => API._fetch("/api/backtest/results", strategy ? { strategy } : {}),
+  backtestRunNow:    () => API._post("/api/backtest/run"),
+  pennyScan:         (params = {}) => API._fetch("/api/penny/scan", params),
+  pennyEV:           (price) => API._fetch("/api/penny/ev", { price }),
+  pennyPositions:    () => API._fetch("/api/penny/positions"),
+  // Live trading
+  liveStatus:        () => API._fetch("/api/trading/live/status"),
+  liveBalance:       () => API._fetch("/api/trading/live/balance"),
+  liveOrders:        () => API._fetch("/api/trading/live/orders"),
+  liveCancelAll:     () => API._post("/api/trading/live/cancel-all"),
+  liveEnable:        (pk, funder, host) => {
+    const params = new URLSearchParams({ private_key: pk, funder });
+    if (host) params.set("host", host);
+    return API._post(`/api/trading/live/enable?${params}`);
+  },
+  liveDisable:       () => API._post("/api/trading/live/disable"),
 });
 
 // Generic POST helper (api.js may not have one)
@@ -378,6 +389,202 @@ async function refreshPenny() {
     </div>`;
 }
 
+// ── Live mode rendering ───────────────────────────────────────────────────────
+
+function renderPendingOrderRow(o) {
+  const side = o.side === "yes"
+    ? `<span style="color:var(--green)">YES</span>`
+    : `<span style="color:var(--red)">NO</span>`;
+  const ageMin = Math.floor(o.age_s / 60);
+  const ageLbl = ageMin > 0 ? `${ageMin}m ago` : `${o.age_s}s ago`;
+  return `
+    <tr>
+      <td class="mono fs-11" title="${o.order_id}">${o.order_id.substring(0, 10)}…</td>
+      <td class="mono fs-11" title="${o.market_id}">${o.market_id.substring(0, 12)}…</td>
+      <td>${side}</td>
+      <td class="mono">${(o.price * 100).toFixed(1)}¢</td>
+      <td class="mono">${o.shares.toFixed(2)}</td>
+      <td class="mono">$${o.cost_basis.toFixed(4)}</td>
+      <td class="mono" style="color:var(--text-muted)">${ageLbl}</td>
+      <td><span class="badge" style="font-size:10px;background:var(--amber)20;color:var(--amber)">${o.status.toUpperCase()}</span></td>
+    </tr>`;
+}
+
+function renderLiveCard(data) {
+  const el = document.getElementById("live-mode-card");
+  if (!el) return;
+
+  const isLive = data.live_mode;
+  const clob   = data.clob || {};
+  const statusColor = isLive && clob.connected
+    ? "var(--green)"
+    : isLive ? "var(--red)" : "var(--text-muted)";
+  const statusLabel = isLive
+    ? (clob.connected ? "LIVE — CONNECTED" : "LIVE — DISCONNECTED")
+    : "PAPER MODE";
+
+  const balStr = isLive && clob.balance_usd != null
+    ? `$${clob.balance_usd.toFixed(4)} USDC`
+    : "—";
+
+  const pendingCount = clob.pending_orders ?? 0;
+
+  // Toggle section
+  const toggleSection = isLive ? `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button id="live-disable-btn" class="btn btn-sm" style="background:var(--red)20;color:var(--red);border:1px solid var(--red)40">
+        Switch to Paper Mode
+      </button>
+      ${pendingCount > 0 ? `
+      <button id="live-cancel-btn" class="btn btn-sm" style="background:var(--amber)20;color:var(--amber);border:1px solid var(--amber)40">
+        Cancel All Orders (${pendingCount})
+      </button>` : ""}
+    </div>` : `
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--blue);user-select:none">
+        Enable Live Trading ▸
+      </summary>
+      <div style="margin-top:10px;padding:12px;background:var(--bg-elevated);border-radius:6px;border:1px solid var(--border)">
+        <div class="warning-box" style="margin-bottom:10px;font-size:11px">
+          ⚠ Real USDC will be spent on Polygon mainnet. Verify credentials before enabling.
+        </div>
+        <div style="display:grid;gap:8px">
+          <label style="font-size:11px;color:var(--text-secondary)">
+            Private Key (0x…)
+            <input id="live-pk-input" type="password" placeholder="0x4c0883a…" class="input-field" style="width:100%;margin-top:4px;font-family:var(--font-mono);font-size:11px" />
+          </label>
+          <label style="font-size:11px;color:var(--text-secondary)">
+            Funder Address (0x…)
+            <input id="live-funder-input" type="text" placeholder="0xAbCd…" class="input-field" style="width:100%;margin-top:4px;font-family:var(--font-mono);font-size:11px" />
+          </label>
+          <label style="font-size:11px;color:var(--text-secondary)">
+            CLOB Host (optional)
+            <input id="live-host-input" type="text" placeholder="https://clob.polymarket.com" class="input-field" style="width:100%;margin-top:4px;font-family:var(--font-mono);font-size:11px" />
+          </label>
+          <button id="live-enable-btn" class="btn btn-primary" style="margin-top:4px">
+            Enable Live Trading
+          </button>
+          <div id="live-enable-error" style="font-size:11px;color:var(--red);display:none"></div>
+        </div>
+      </div>
+    </details>`;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <div style="width:9px;height:9px;border-radius:50%;background:${statusColor};${isLive && clob.connected ? `box-shadow:0 0 8px ${statusColor}` : ""}"></div>
+          <span style="font-weight:700;font-size:13px;color:${statusColor}">${statusLabel}</span>
+          ${isLive && clob.funder ? `<span class="mono fs-11" style="color:var(--text-dim)">${clob.funder}</span>` : ""}
+        </div>
+        <div style="display:flex;gap:16px;font-size:12px;flex-wrap:wrap">
+          <span><span style="color:var(--text-dim)">Balance: </span><span class="mono" style="color:var(--text-primary)">${balStr}</span></span>
+          <span><span style="color:var(--text-dim)">Pending orders: </span><span class="mono">${pendingCount}</span></span>
+          ${data.live_error ? `<span style="color:var(--red);font-size:11px">Error: ${data.live_error}</span>` : ""}
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);text-align:right">
+        ${isLive ? "Shadow paper also running" : "py-clob-client required for live"}
+      </div>
+    </div>
+    ${toggleSection}`;
+
+  // Wire up live control buttons after injecting HTML
+  _wireLiveButtons();
+}
+
+function _wireLiveButtons() {
+  const enableBtn  = document.getElementById("live-enable-btn");
+  const disableBtn = document.getElementById("live-disable-btn");
+  const cancelBtn  = document.getElementById("live-cancel-btn");
+
+  if (enableBtn) {
+    enableBtn.addEventListener("click", async () => {
+      const pk     = document.getElementById("live-pk-input")?.value?.trim();
+      const funder = document.getElementById("live-funder-input")?.value?.trim();
+      const host   = document.getElementById("live-host-input")?.value?.trim() || undefined;
+      const errEl  = document.getElementById("live-enable-error");
+
+      if (!pk || !funder) {
+        if (errEl) { errEl.textContent = "Private key and funder address are required"; errEl.style.display = ""; }
+        return;
+      }
+      if (!pk.startsWith("0x")) {
+        if (errEl) { errEl.textContent = "Private key must start with 0x"; errEl.style.display = ""; }
+        return;
+      }
+
+      enableBtn.disabled = true;
+      enableBtn.textContent = "Enabling…";
+      if (errEl) errEl.style.display = "none";
+
+      const { data, error } = await API.liveEnable(pk, funder, host);
+      enableBtn.disabled = false;
+      enableBtn.textContent = "Enable Live Trading";
+
+      if (error || !data?.live_mode) {
+        const msg = data?.detail || error || "Unknown error — check backend logs";
+        if (errEl) { errEl.textContent = msg; errEl.style.display = ""; }
+      } else {
+        await refreshLive();
+        await refreshStats();
+      }
+    });
+  }
+
+  if (disableBtn) {
+    disableBtn.addEventListener("click", async () => {
+      disableBtn.disabled = true;
+      await API.liveDisable();
+      await refreshLive();
+      await refreshStats();
+    });
+  }
+
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", async () => {
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = "Cancelling…";
+      await API.liveCancelAll();
+      await refreshLive();
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = "Cancel All Orders";
+    });
+  }
+}
+
+function renderPendingOrdersPanel(orders) {
+  const el = document.getElementById("live-pending-orders");
+  if (!el) return;
+
+  if (!orders?.length) {
+    el.innerHTML = `<div class="loading-text">No pending CLOB orders</div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead>
+          <tr><th>Order ID</th><th>Market</th><th>Side</th><th>Price</th><th>Shares</th><th>Cost</th><th>Age</th><th>Status</th></tr>
+        </thead>
+        <tbody>${orders.map(renderPendingOrderRow).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+export async function refreshLive() {
+  const { data } = await API.liveStatus();
+  if (!data) return;
+  renderLiveCard(data);
+
+  // Pending orders panel (only relevant in live mode)
+  if (data.live_mode) {
+    const { data: ord } = await API.liveOrders();
+    renderPendingOrdersPanel(ord?.orders || []);
+  }
+}
+
 // ── Backtest rendering ────────────────────────────────────────────────────────
 
 function stratColor(avgReturn) {
@@ -525,7 +732,8 @@ export async function initTradingView() {
 }
 
 export async function loadTrading() {
-  await Promise.all([refreshStats(), refreshBacktest(), refreshPenny()]);
+  await Promise.all([refreshStats(), refreshBacktest(), refreshPenny(), refreshLive()]);
   setInterval(refreshBacktest, 5 * 60 * 1000);
-  setInterval(refreshPenny, 10 * 60 * 1000);  // refresh penny scan every 10 min
+  setInterval(refreshPenny,   10 * 60 * 1000);  // refresh penny scan every 10 min
+  setInterval(refreshLive,    30 * 1000);        // refresh live CLOB status every 30s
 }
