@@ -1,0 +1,17 @@
+# Cloned reference repositories (used for analysis only, not part of the project)
+refs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# OS
+.DS_Store
+Thumbs.db
