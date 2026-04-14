@@ -50,6 +50,11 @@ from data.polymarket_adapter import get_order_book, get_live_midpoint, search_ma
 from data.yfinance_adapter import get_quote
 from analysis.news_correlator import MARKET_DRIVERS
 from trading.models import SignalType, OrderSide
+from trading.penny_scanner import (
+    scan_penny_markets, rank_opportunities, calc_ev, calc_confidence,
+    ENTRY_PRICE as PENNY_ENTRY, TAKE_PROFIT as PENNY_TP,
+    TARGET_POS as PENNY_TARGET_POS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -470,6 +475,74 @@ async def detect_momentum_correlation(
     return signals
 
 
+# ── Penny harvest detector ────────────────────────────────────────────────────
+
+async def detect_penny_harvest(
+    current_positions: int = 0,
+    max_new_signals: int = 20,
+) -> List[Dict]:
+    """
+    Scan all active markets for 1-cent contracts with positive expected value.
+
+    Edge (from @paonx_eth dataset — 400M trades, 6 years):
+      EV per $0.01 contract = +$0.0336 (verified positive)
+      Portfolio EV on 50 positions × $1 each = +$206 expected per cycle
+
+    Rules applied from the 8 winning wallets:
+      - Limit orders only (no taker fees at entry)
+      - No category filter (scan everything)
+      - Mechanical TP at 99c (eliminate disposition effect)
+      - Hold concurrently across 50 positions
+
+    Only emits signals if we are below the TARGET_POS threshold.
+    Each signal has a PENNY_HARVEST type and confidence derived from EV.
+    """
+    slots_available = max(0, PENNY_TARGET_POS - current_positions)
+    if slots_available <= 0:
+        return []
+
+    try:
+        opps = await scan_penny_markets()
+    except Exception as e:
+        logger.debug("Penny scan error: %s", e)
+        return []
+
+    if not opps:
+        return []
+
+    ranked = rank_opportunities(opps)
+    signals = []
+
+    for opp in ranked[:max_new_signals]:
+        signals.append(_make_signal(
+            signal_type = SignalType.PENNY_HARVEST,
+            side        = OrderSide.YES if opp["side"] == "yes" else OrderSide.NO,
+            confidence  = opp["confidence"],
+            market_id   = opp["condition_id"],
+            rationale   = (
+                f"1c harvest: EV=+${opp['ev']:.4f}/share · "
+                f"liq=${opp['liquidity']:,.0f} · "
+                f"{opp['days_to_expiry']:.0f}d left · "
+                f"score={opp['score']}"
+            ),
+            suggested_price = opp["entry_price"],
+            suggested_size  = 1.0,   # $1 per position (100 shares × $0.01)
+            metadata = {
+                "ev":             opp["ev"],
+                "ev_pct":         opp["ev_pct"],
+                "token_id":       opp["token_id"],
+                "slug":           opp["slug"],
+                "question":       opp["question"],
+                "days_to_expiry": opp["days_to_expiry"],
+                "liquidity":      opp["liquidity"],
+                "take_profit":    PENNY_TP,
+                "score":          opp["score"],
+            },
+        ))
+
+    return signals
+
+
 # ── Master signal scan ────────────────────────────────────────────────────────
 
 async def run_signal_scan(
@@ -480,6 +553,7 @@ async def run_signal_scan(
     btc_yes_token_id:    Optional[str] = None,
     btc_market_id:       str = "",
     btc_question:        str = "Will BTC be UP in the next 5 minutes?",
+    current_penny_positions: int = 0,
 ) -> List[Dict]:
     """
     Run all signal detectors concurrently. Returns a combined, deduplicated,
@@ -505,6 +579,10 @@ async def run_signal_scan(
 
     if momentum_candidates and biotech_markets:
         signals += await detect_momentum_correlation(momentum_candidates, biotech_markets)
+
+    # Penny harvest — scans ALL markets, runs concurrently with other detectors
+    penny_signals = await detect_penny_harvest(current_positions=current_penny_positions)
+    signals += penny_signals
 
     # Deduplicate by (market_id, side)
     seen = set()

@@ -398,6 +398,46 @@ class DeepValueStrategy(_LongOnlyBase):
             self._exit(prices[-1], len(prices) - 1)
 
 
+class PennyHarvestStrategy(_LongOnlyBase):
+    """
+    Implements the @paonx_eth dead-contract asymmetric-EV strategy.
+
+    Rules (exact match to the 8 wallet patterns):
+      - Enter at any price ≤ entry_max (default 3c)
+      - Take profit mechanically at take_profit (default 99c)
+      - NO stop loss — the entire loss is already capped at entry price
+      - Hold concurrently across many positions (each position in the backtest
+        represents one market slot; multi-market is simulated in run_full_backtest)
+      - Never re-enter the same market after exit
+
+    EV formula verified from 400M trade dataset:
+      EV = (0.0266 × 0.99) + (0.0333 × 0.50) + (0.94 × -entry_price) = +$0.0336 at 1c
+    """
+
+    def __init__(self, entry_max=0.03, take_profit=0.99, **kwargs):
+        super().__init__(**kwargs)
+        self.entry_max   = entry_max
+        self.take_profit = take_profit
+        self._entered    = False
+
+    def run(self, prices: List[float]) -> None:
+        for i, p in enumerate(prices):
+            if not self.in_position and not self._entered:
+                if p <= self.entry_max:
+                    self._enter(p, i)
+                    self._entered = True
+            elif self.in_position:
+                # Take profit at 99c — NO stop loss
+                if p >= self.take_profit:
+                    self._exit(p, i)
+                    self._mark(p)
+                    continue
+            self._mark(p)
+        # If still holding at end, force-close at final price (resolution)
+        if self.in_position and prices:
+            self._exit(prices[-1], len(prices) - 1)
+
+
 # ── Strategy registry ─────────────────────────────────────────────────────────
 
 STRATEGY_REGISTRY: Dict[str, Tuple[type, Dict]] = {
@@ -428,6 +468,12 @@ STRATEGY_REGISTRY: Dict[str, Tuple[type, Dict]] = {
     }),
     "deep_value": (DeepValueStrategy, {
         "entry_price_max": 0.25,
+    }),
+    # Penny harvest: the 1-cent dead-contract asymmetric EV strategy
+    # (from @paonx_eth — 400M trades, 6 years, 8 wallets × 100x returns)
+    "penny_harvest": (PennyHarvestStrategy, {
+        "entry_max": 0.03,     # enter at ≤ 3 cents
+        "take_profit": 0.99,   # exit at 99 cents — never earlier
     }),
 }
 

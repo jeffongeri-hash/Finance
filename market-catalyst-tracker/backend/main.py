@@ -41,6 +41,13 @@ from trading.backtester import (
     run_full_backtest, backtest_market, aggregate_results,
     STRATEGY_REGISTRY,
 )
+from trading.penny_scanner import (
+    scan_penny_markets, rank_opportunities,
+    calc_ev, calc_confidence, validate_portfolio_ev,
+    ENTRY_PRICE as PENNY_ENTRY, TAKE_PROFIT as PENNY_TP,
+    TARGET_POS as PENNY_TARGET, ORDER_SIZE as PENNY_SIZE,
+    FULL_RESOLVE_RATE, BOUNCE_RATE, LOSS_RATE,
+)
 from analysis.prediction_scanner import (
     pull_all_prediction_data,
     get_biotech_fda_markets,
@@ -702,6 +709,97 @@ async def backtest_single_market(
         "profit_factor": result.profit_factor,
         "expected_value":result.expected_value,
         "config":        result.config,
+    }
+
+
+# ── Penny Harvest Routes ─────────────────────────────────────────────────────
+
+@app.get("/api/penny/scan")
+async def penny_scan(
+    entry_max: float = Query(0.03, description="Max entry price (default 3c)"),
+    min_liquidity: float = Query(1000, description="Min market liquidity ($)"),
+    min_days: int = Query(14, description="Min days to expiry"),
+    max_days: int = Query(200, description="Max days to expiry"),
+):
+    """
+    Scan all active Polymarket markets for 1-cent contracts with positive EV.
+
+    Strategy from @paonx_eth (400M trades / 6 years):
+      EV per $0.01 contract = +$0.0336
+      Portfolio EV on 50 positions = +206% expected return per cycle
+
+    Returns opportunities sorted by composite score (EV + liquidity + days-to-expiry).
+    """
+    opps = await _acached(
+        f"penny_scan_{entry_max}_{min_liquidity}",
+        300,   # 5-min cache
+        scan_penny_markets(
+            entry_max=entry_max,
+            min_liquidity=min_liquidity,
+            min_days=min_days,
+            max_days=max_days,
+        )
+    )
+    ranked = rank_opportunities(opps) if opps else []
+    return {
+        "opportunities": ranked,
+        "count":         len(ranked),
+        "ev_formula":    "EV = (0.0266×$0.99) + (0.0333×$0.50) + (0.94×-entry_price)",
+        "portfolio_ev":  validate_portfolio_ev(ranked[:50]),
+        "parameters": {
+            "entry_max":     entry_max,
+            "take_profit":   PENNY_TP,
+            "order_size":    PENNY_SIZE,
+            "target_pos":    PENNY_TARGET,
+            "min_liquidity": min_liquidity,
+        },
+        "dataset_stats": {
+            "full_resolve_rate": FULL_RESOLVE_RATE,
+            "bounce_rate":       BOUNCE_RATE,
+            "loss_rate":         round(LOSS_RATE, 4),
+            "ev_per_contract":   round(calc_ev(PENNY_ENTRY), 4),
+        },
+        "timestamp": int(time.time()),
+    }
+
+
+@app.get("/api/penny/ev")
+async def penny_ev_calculator(price: float = Query(0.01, ge=0.001, le=0.10)):
+    """
+    Calculate expected value for a given entry price.
+    EV = P(full_resolve)×(0.99-p) + P(bounce)×(0.50-p) + P(loss)×(-p)
+    """
+    ev         = calc_ev(price)
+    confidence = calc_confidence(price)
+    portfolio_ev_100 = ev * 100 * (1.0 / price)   # 100 positions × 1/price shares
+    return {
+        "entry_price":    price,
+        "ev_per_share":   round(ev, 6),
+        "ev_per_dollar":  round(ev / price, 4),
+        "confidence":     confidence,
+        "portfolio_ev_100_positions": round(portfolio_ev_100, 2),
+        "is_positive_ev": ev > 0,
+        "breakdown": {
+            "full_resolve_contribution": round(FULL_RESOLVE_RATE * (0.99 - price), 6),
+            "bounce_contribution":       round(BOUNCE_RATE * (0.50 - price), 6),
+            "loss_contribution":         round(LOSS_RATE * (-price), 6),
+        },
+    }
+
+
+@app.get("/api/penny/positions")
+async def penny_positions():
+    """Current open penny harvest positions tracked by the engine."""
+    engine = get_engine()
+    if not engine:
+        return {"positions": [], "count": 0, "target": PENNY_TARGET}
+    pos = engine.get_penny_positions()
+    return {
+        "positions":  pos,
+        "count":      len(pos),
+        "target":     PENNY_TARGET,
+        "portfolio_ev": validate_portfolio_ev(pos),
+        "timestamp":  int(time.time()),
     }
 
 

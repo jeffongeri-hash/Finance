@@ -43,6 +43,7 @@ class SignalType(Enum):
     NEWS_LAG               = "news_lag"                 # market slow to reprice on news
     MOMENTUM_CORRELATION   = "momentum_correlation"     # stock squeeze → PM event
     TIME_OF_DAY            = "time_of_day"              # pattern-based window
+    PENNY_HARVEST          = "penny_harvest"            # 1c dead-contract asymmetric EV farm
 
 
 @dataclass

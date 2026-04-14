@@ -43,6 +43,11 @@ from trading.models import (
 )
 from trading.paper_trader import PaperTrader
 from trading.signals import run_signal_scan
+from trading.penny_scanner import (
+    scan_penny_markets, rank_opportunities, validate_portfolio_ev,
+    TAKE_PROFIT as PENNY_TP, TARGET_POS as PENNY_TARGET_POS,
+    ORDER_SIZE as PENNY_ORDER_SIZE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +92,9 @@ class TradingEngine:
         self._log:     List[Dict] = []   # engine event log (last 200)
         self._day_start_balance = initial_balance
         self._day_start_ts      = time.time()
+        # Penny harvest tracking
+        self._penny_positions: Dict[str, Dict] = {}  # token_id → opportunity metadata
+        self._penny_scan_ts:   float = 0.0
 
     # ── Control ────────────────────────────────────────────────────────────────
 
@@ -99,6 +107,7 @@ class TradingEngine:
 
         self._tasks = [
             asyncio.create_task(self._scan_loop()),
+            asyncio.create_task(self._penny_harvest_loop()),
             asyncio.create_task(self._settlement_loop()),
             asyncio.create_task(self._stop_loss_monitor()),
             asyncio.create_task(self._daily_reset_loop()),
@@ -143,24 +152,31 @@ class TradingEngine:
         momentum_result = await run_momentum_scan(universe=None, top_n=20, min_score=35)
         momentum_cands  = [c.model_dump() for c in momentum_result.candidates]
 
-        # Run all signal detectors
+        # Run all signal detectors (pass penny position count for harvest slots)
+        penny_pos_count = len(self._penny_positions)
         signals = await run_signal_scan(
-            biotech_markets     = biotech,
-            macro_markets       = macro,
-            news_items          = news_items,
-            momentum_candidates = momentum_cands,
+            biotech_markets          = biotech,
+            macro_markets            = macro,
+            news_items               = news_items,
+            momentum_candidates      = momentum_cands,
+            current_penny_positions  = penny_pos_count,
         )
 
         self._signals = signals
-        self._log_event("SCAN_COMPLETE", f"{len(signals)} signals found")
+        penny_count = sum(1 for s in signals if s.get("signal_type") == "penny_harvest")
+        self._log_event(
+            "SCAN_COMPLETE",
+            f"{len(signals)} signals ({penny_count} penny harvest) | "
+            f"penny positions: {penny_pos_count}/{PENNY_TARGET_POS}"
+        )
 
         # Execute top signals above confidence threshold
+        # NOTE: penny_harvest signals bypass min_confidence check — edge is in EV not per-trade probability
         for sig in signals:
-            if sig["confidence"] < self.min_confidence:
-                continue
-            if not sig["market_id"]:
-                continue
-            await self._execute_signal(sig, biotech + macro)
+            if sig.get("signal_type") == "penny_harvest":
+                await self._execute_penny_signal(sig)
+            elif sig["confidence"] >= self.min_confidence and sig["market_id"]:
+                await self._execute_signal(sig, biotech + macro)
 
     async def _execute_signal(self, signal: Dict, markets: List[Dict]):
         """Attempt to enter a position based on a signal."""
@@ -217,6 +233,143 @@ class TradingEngine:
                 f"${size:.0f} @ {limit_price:.3f} | conf={signal['confidence']:.0%} | "
                 f"{signal['rationale'][:60]}"
             ))
+
+    # ── Penny harvest execution ───────────────────────────────────────────────
+
+    async def _execute_penny_signal(self, signal: Dict):
+        """
+        Execute a PENNY_HARVEST signal with special rules:
+          - Position size: exactly $1 (100 shares @ $0.01)
+          - Limit order at entry_price (no taker fee)
+          - Take profit pre-set at 99c
+          - NO stop loss (loss is already capped at $1)
+          - Never double-enter same token
+        """
+        token_id  = signal.get("metadata", {}).get("token_id", "")
+        market_id = signal["market_id"]
+
+        if not token_id or not market_id:
+            return
+
+        # Never double-enter same token
+        if token_id in self._penny_positions:
+            return
+
+        # Enforce position cap
+        if len(self._penny_positions) >= PENNY_TARGET_POS:
+            return
+
+        side_str  = signal["side"]
+        side      = OrderSide.YES if side_str == "yes" else OrderSide.NO
+        entry_p   = signal.get("suggested_price") or 0.01
+        meta      = signal.get("metadata", {})
+
+        ctx = MarketContext(
+            condition_id = market_id,
+            question     = meta.get("question", "")[:80],
+            slug         = meta.get("slug", ""),
+            yes_token_id = token_id if side == OrderSide.YES else "",
+            no_token_id  = token_id if side == OrderSide.NO  else "",
+            phase        = MarketPhase.ACTIVE,
+            yes_price    = entry_p if side == OrderSide.YES else 1 - entry_p,
+            no_price     = entry_p if side == OrderSide.NO  else 1 - entry_p,
+        )
+
+        # $1 position: 100 shares × $0.01
+        dollar_size = min(1.0, self.trader.balance * 0.001)  # never risk more than 0.1% balance
+        if dollar_size < 0.50:
+            return
+
+        order = await self.trader.buy(ctx, side, dollar_size, entry_p)
+        if order:
+            self._penny_positions[token_id] = {
+                "market_id":   market_id,
+                "token_id":    token_id,
+                "side":        side_str,
+                "entry_price": entry_p,
+                "take_profit": PENNY_TP,
+                "ev":          meta.get("ev", 0),
+                "question":    meta.get("question", "")[:60],
+                "slug":        meta.get("slug", ""),
+                "entered_at":  time.time(),
+            }
+            self._markets[market_id] = ctx
+            self._log_event("PENNY_ENTRY",
+                f"${dollar_size:.2f} @ {entry_p:.3f} | "
+                f"EV=+${meta.get('ev', 0):.4f} | "
+                f"TP={PENNY_TP} | {meta.get('question', '')[:50]}")
+
+    async def _penny_harvest_loop(self):
+        """
+        Dedicated penny harvest monitor loop.
+        - Scans for new opportunities every 15 minutes
+        - Monitors existing positions and places TP orders when price hits 99c
+        - Never sets stop-loss (the edge requires holding until resolution)
+        """
+        SCAN_INTERVAL = 900   # 15 minutes
+        MONITOR_INTERVAL = 30  # check prices every 30s
+
+        monitor_tick = 0
+        while self._running:
+            try:
+                await asyncio.sleep(MONITOR_INTERVAL)
+                monitor_tick += 1
+
+                # Check for TP on existing positions every 30s
+                await self._check_penny_take_profits()
+
+                # Re-scan for new opportunities every 15 min
+                if monitor_tick * MONITOR_INTERVAL >= SCAN_INTERVAL:
+                    monitor_tick = 0
+                    open_count = len(self._penny_positions)
+                    self._log_event(
+                        "PENNY_SCAN",
+                        f"Open: {open_count}/{PENNY_TARGET_POS} | "
+                        f"balance: ${self.trader.balance:,.2f}"
+                    )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug("Penny harvest loop: %s", e)
+
+    async def _check_penny_take_profits(self):
+        """Check all open penny positions and take profit at PENNY_TP."""
+        from data.polymarket_adapter import get_live_midpoint
+
+        for token_id, pos_meta in list(self._penny_positions.items()):
+            try:
+                current = await get_live_midpoint(token_id)
+                if current is None:
+                    continue
+
+                # Take profit: price has reached 99c
+                if current >= PENNY_TP * 0.98:  # 0.97+ triggers (slight tolerance)
+                    market_id = pos_meta["market_id"]
+                    ctx = self._markets.get(market_id)
+                    if not ctx:
+                        continue
+                    side = OrderSide.YES if pos_meta["side"] == "yes" else OrderSide.NO
+                    position = self.trader.get_position(market_id, side)
+                    if position and position.settled:
+                        trade = await self.trader.sell(ctx, position, min_price=current * 0.95)
+                        if trade:
+                            hold_s = time.time() - pos_meta["entered_at"]
+                            self._log_event("PENNY_TP",
+                                f"${trade.net_pnl:+.2f} PnL | "
+                                f"entry={pos_meta['entry_price']:.3f} exit={current:.3f} | "
+                                f"held {hold_s/3600:.1f}h | {pos_meta['question'][:40]}")
+                            del self._penny_positions[token_id]
+
+                # Resolved at zero — remove from tracking
+                elif current <= 0.01 and pos_meta.get("entry_price", 0.01) > 0.005:
+                    # Price essentially zero → resolved as loss, clean up
+                    del self._penny_positions[token_id]
+                    self._log_event("PENNY_LOSS",
+                        f"resolved @ {current:.3f} | {pos_meta['question'][:50]}")
+
+            except Exception as e:
+                logger.debug("Penny TP check %s: %s", token_id[:12], e)
 
     # ── Stop-loss monitor ──────────────────────────────────────────────────────
 
@@ -291,16 +444,24 @@ class TradingEngine:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def get_stats(self) -> Dict:
+        penny_pos = list(self._penny_positions.values())
         return {
             **self.trader.stats(),
-            "is_running":    self._running,
-            "live_mode":     self.live_mode,
-            "daily_pnl":     round(self._daily_pnl(), 2),
-            "active_signals":len(self._signals),
-            "signals":       self._signals[:10],  # top 10 current signals
-            "event_log":     self._log[-30:],      # last 30 events
-            "open_markets":  list(self._markets.keys()),
+            "is_running":         self._running,
+            "live_mode":          self.live_mode,
+            "daily_pnl":          round(self._daily_pnl(), 2),
+            "active_signals":     len(self._signals),
+            "signals":            self._signals[:10],  # top 10 current signals
+            "event_log":          self._log[-30:],      # last 30 events
+            "open_markets":       list(self._markets.keys()),
+            "penny_positions":    penny_pos,
+            "penny_count":        len(penny_pos),
+            "penny_target":       PENNY_TARGET_POS,
+            "penny_capital_at_risk": round(sum(p.get("entry_price", 0.01) for p in penny_pos), 2),
         }
+
+    def get_penny_positions(self) -> List[Dict]:
+        return list(self._penny_positions.values())
 
     def get_signals(self) -> List[Dict]:
         return self._signals

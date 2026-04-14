@@ -580,6 +580,41 @@
         </div>
       </div>
 
+      <!-- Penny Harvest panel -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <span style="background:var(--green);color:#000;border-radius:3px;padding:1px 6px;font-size:11px;font-weight:700;margin-right:8px">1¢</span>
+            Penny Harvest — Dead Contract Asymmetric Edge
+          </span>
+          <div class="flex items-center gap-8">
+            <span id="penny-pos-label" class="mono fs-11" style="color:var(--green)">0/50 positions</span>
+            <button class="card-action" id="penny-scan-btn" style="border:1px solid var(--border);padding:4px 10px;border-radius:var(--radius-sm)">Scan Now</button>
+          </div>
+        </div>
+        <div class="flex items-center gap-8 fs-11" style="margin-bottom:10px;flex-wrap:wrap">
+          <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 12px">
+            <span style="color:var(--text-dim)">EV per $0.01 </span><span class="mono" style="color:var(--green)">+$0.0336</span>
+          </div>
+          <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 12px">
+            <span style="color:var(--text-dim)">Win rate </span><span class="mono">6%</span>
+            <span style="color:var(--text-dim);margin-left:6px">(2.66% full + 3.33% bounce)</span>
+          </div>
+          <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 12px">
+            <span style="color:var(--text-dim)">Portfolio EV on 50× </span><span class="mono" style="color:var(--green)">+$206 on $100 risk</span>
+          </div>
+          <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 12px">
+            <span style="color:var(--text-dim)">Exit rule </span><span class="mono">TP @ 99¢ only</span>
+          </div>
+        </div>
+        <div id="penny-ev-strip" style="font-size:11px;color:var(--text-dim);margin-bottom:10px;font-family:var(--font-mono)">
+          EV = (0.0266 × $0.99) + (0.0333 × $0.50) + (0.94 × -$0.01) = <strong style="color:var(--green)">+$0.0336</strong>
+        </div>
+        <div id="penny-opportunities">
+          <div class="loading-text" style="padding:30px">Click "Scan Now" to find 1¢ contracts</div>
+        </div>
+      </div>
+
       <!-- Backtest results -->
       <div class="card">
         <div class="card-header">

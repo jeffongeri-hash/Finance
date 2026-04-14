@@ -27,6 +27,9 @@ Object.assign(API, {
   backtestSummary: () => API._fetch("/api/backtest/summary"),
   backtestResults: (strategy) => API._fetch("/api/backtest/results", strategy ? { strategy } : {}),
   backtestRunNow:  () => API._post("/api/backtest/run"),
+  pennyScan:       (params = {}) => API._fetch("/api/penny/scan", params),
+  pennyEV:         (price) => API._fetch("/api/penny/ev", { price }),
+  pennyPositions:  () => API._fetch("/api/penny/positions"),
 });
 
 // Generic POST helper (api.js may not have one)
@@ -306,6 +309,75 @@ export async function refreshStats() {
   renderStats(data);
 }
 
+// ── Penny harvest rendering ───────────────────────────────────────────────────
+
+function evColor(ev) {
+  if (ev > 0.025) return "var(--green)";
+  if (ev > 0.010) return "#6ee7b7";
+  return "var(--amber)";
+}
+
+function renderPennyRow(opp) {
+  const ev    = opp.ev ?? 0;
+  const score = opp.score ?? 0;
+  const days  = opp.days_to_expiry ?? 0;
+  const liq   = opp.liquidity ?? 0;
+  return `
+    <tr>
+      <td style="max-width:280px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${opp.question}">${opp.question}</td>
+      <td><span class="badge ${opp.side === 'yes' ? 'badge-green' : 'badge-red'}" style="font-size:10px">${(opp.outcome || opp.side).toUpperCase()}</span></td>
+      <td class="mono" style="color:var(--amber)">${(opp.entry_price * 100).toFixed(1)}¢</td>
+      <td class="mono" style="color:${evColor(ev)}">+$${ev.toFixed(4)}</td>
+      <td class="mono" style="color:${evColor(ev)}">${(opp.confidence * 100).toFixed(0)}%</td>
+      <td class="mono">$${(liq / 1000).toFixed(0)}k</td>
+      <td class="mono">${days.toFixed(0)}d</td>
+      <td class="mono" style="color:var(--text-muted)">${score.toFixed(0)}</td>
+    </tr>`;
+}
+
+async function refreshPenny() {
+  const { data } = await API.pennyScan();
+  if (!data) return;
+
+  const posLabel = document.getElementById("penny-pos-label");
+  if (posLabel && data.portfolio_ev) {
+    const needed = data.portfolio_ev.positions_needed ?? 0;
+    const curr   = (data.parameters?.target_pos ?? 50) - needed;
+    posLabel.textContent = `${curr}/${data.parameters?.target_pos ?? 50} positions`;
+  }
+
+  const el = document.getElementById("penny-opportunities");
+  if (!el) return;
+
+  const opps = data.opportunities || [];
+  if (!opps.length) {
+    el.innerHTML = `<div class="loading-text">No penny opportunities found (all markets above 3¢ or low liquidity)</div>`;
+    return;
+  }
+
+  const pev = data.portfolio_ev || {};
+  const statsHtml = `
+    <div class="flex items-center gap-8 fs-11" style="margin-bottom:8px;flex-wrap:wrap">
+      <div><span style="color:var(--text-dim)">Opportunities found: </span><strong class="mono">${opps.length}</strong></div>
+      <div><span style="color:var(--text-dim)">Portfolio EV (50 pos): </span><span class="mono" style="color:var(--green)">+$${(pev.portfolio_ev ?? 0).toFixed(2)}</span></div>
+      <div><span style="color:var(--text-dim)">Kelly fraction: </span><span class="mono">${((pev.kelly_fraction ?? 0) * 100).toFixed(1)}%</span></div>
+      <div><span style="color:var(--text-dim)">Positions needed: </span><span class="mono">${pev.positions_needed ?? 50}</span></div>
+    </div>`;
+
+  el.innerHTML = statsHtml + `
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Question</th><th>Side</th><th>Price</th><th>EV/share</th>
+            <th>Conf</th><th>Liquidity</th><th>Days</th><th>Score</th>
+          </tr>
+        </thead>
+        <tbody>${opps.slice(0, 30).map(renderPennyRow).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
 // ── Backtest rendering ────────────────────────────────────────────────────────
 
 function stratColor(avgReturn) {
@@ -387,9 +459,10 @@ async function refreshBacktest() {
 
 export async function initTradingView() {
   // Wire up buttons
-  const startBtn = document.getElementById("engine-start-btn");
-  const stopBtn  = document.getElementById("engine-stop-btn");
-  const btRunBtn = document.getElementById("bt-run-btn");
+  const startBtn    = document.getElementById("engine-start-btn");
+  const stopBtn     = document.getElementById("engine-stop-btn");
+  const btRunBtn    = document.getElementById("bt-run-btn");
+  const pennyScanBtn = document.getElementById("penny-scan-btn");
 
   if (startBtn) {
     startBtn.addEventListener("click", async () => {
@@ -424,7 +497,6 @@ export async function initTradingView() {
       btRunBtn.disabled = true;
       btRunBtn.textContent = "Running…";
       await API.backtestRunNow();
-      // Poll until results update
       let polls = 0;
       const poll = setInterval(async () => {
         polls++;
@@ -438,10 +510,22 @@ export async function initTradingView() {
       }, 5_000);
     });
   }
+
+  if (pennyScanBtn) {
+    pennyScanBtn.addEventListener("click", async () => {
+      pennyScanBtn.disabled = true;
+      pennyScanBtn.textContent = "Scanning…";
+      const el = document.getElementById("penny-opportunities");
+      if (el) el.innerHTML = `<div class="loading-text" style="padding:30px">Scanning all Polymarket markets for 1¢ contracts…</div>`;
+      await refreshPenny();
+      pennyScanBtn.disabled = false;
+      pennyScanBtn.textContent = "Scan Now";
+    });
+  }
 }
 
 export async function loadTrading() {
-  await Promise.all([refreshStats(), refreshBacktest()]);
-  // Refresh backtest display every 5 min while view is loaded
+  await Promise.all([refreshStats(), refreshBacktest(), refreshPenny()]);
   setInterval(refreshBacktest, 5 * 60 * 1000);
+  setInterval(refreshPenny, 10 * 60 * 1000);  // refresh penny scan every 10 min
 }
