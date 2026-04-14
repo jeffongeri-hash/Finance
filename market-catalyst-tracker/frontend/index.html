@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Market Catalyst Tracker</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <!-- TradingView Lightweight Charts — standalone (no npm needed) -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- ══════════════════════════════════════════ TOP BAR ══════════════════════ -->
+  <header id="topbar">
+    <a class="logo" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
+        <polyline points="16 7 22 7 22 13"/>
+      </svg>
+      CATALYST TRACKER
+    </a>
+
+    <!-- Live index ticker strip -->
+    <div id="index-ticker">
+      <div class="ticker-item">
+        <span class="sym">SPY</span>
+        <span class="price">—</span>
+        <span class="chg flat">—</span>
+      </div>
+    </div>
+
+    <!-- Search -->
+    <div id="topbar-search">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <input id="search-input" type="text" placeholder="Symbol lookup…" autocomplete="off" autocorrect="off" spellcheck="false" />
+    </div>
+
+    <!-- WebSocket status dot -->
+    <div id="ws-status" title="WebSocket status"></div>
+  </header>
+
+  <!-- ══════════════════════════════════════════ SIDEBAR ══════════════════════ -->
+  <nav id="sidebar">
+    <div class="nav-section-label">Markets</div>
+
+    <button class="nav-item active" data-view="dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+      </svg>
+      Overview
+    </button>
+
+    <button class="nav-item" data-view="chart">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+      Charts
+    </button>
+
+    <div class="nav-section-label">Intelligence</div>
+
+    <button class="nav-item" data-view="catalyst">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+      </svg>
+      Catalyst Calendar
+      <span class="sidebar-badge" id="catalyst-nav-badge"></span>
+    </button>
+
+    <button class="nav-item" data-view="momentum">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="20" x2="12" y2="10"/>
+        <line x1="18" y1="20" x2="18" y2="4"/>
+        <line x1="6" y1="20" x2="6" y2="16"/>
+      </svg>
+      Momentum Scanner
+    </button>
+
+    <div class="nav-section-label">Analysis</div>
+
+    <button class="nav-item" data-view="why">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      Why Moving?
+    </button>
+
+  </nav>
+
+  <!-- ══════════════════════════════════════════ MAIN ═════════════════════════ -->
+  <main id="main">
+
+    <!-- ── DASHBOARD VIEW ──────────────────────────────────────────────────── -->
+    <section id="view-dashboard" class="view active">
+
+      <!-- Row 1: Why is the market moving -->
+      <div class="card" style="background:var(--bg-elevated);border-color:var(--border-bright)">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:middle;margin-right:6px">
+              <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            Why Is The Market Moving?
+          </span>
+          <button class="card-action" onclick="refreshCorrelation()">Refresh</button>
+        </div>
+        <div id="why-moving-panel"><div class="loading-text">Analyzing…</div></div>
+      </div>
+
+      <!-- Row 2: Major indices -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Major Indices</span>
+        </div>
+        <div id="indices-grid" class="grid-4">
+          <div class="loading-text">Loading…</div>
+        </div>
+      </div>
+
+      <!-- Row 3: Sectors + Movers side-by-side -->
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Sector Performance</span>
+          </div>
+          <div id="sectors-grid" class="grid-auto">
+            <div class="loading-text">Loading…</div>
+          </div>
+        </div>
+
+        <div class="flex-col gap-16">
+          <!-- Top Gainers -->
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title" style="color:var(--green)">▲ Top Gainers</span>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>Symbol</th><th>Price</th><th>Change</th><th>Mkt Cap</th>
+                </tr>
+              </thead>
+              <tbody id="gainers-body">
+                <tr><td colspan="5" class="loading-text">Scanning…</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- Top Losers -->
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title" style="color:var(--red)">▼ Top Losers</span>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>Symbol</th><th>Price</th><th>Change</th><th>Mkt Cap</th>
+                </tr>
+              </thead>
+              <tbody id="losers-body">
+                <tr><td colspan="5" class="loading-text">Scanning…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 4: Market news feed -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Market News Feed</span>
+          <button class="card-action" onclick="loadDashboard()">Refresh</button>
+        </div>
+        <div id="dashboard-news"><div class="loading-text">Fetching…</div></div>
+      </div>
+
+    </section>
+
+    <!-- ── CHART VIEW ───────────────────────────────────────────────────────── -->
+    <section id="view-chart" class="view">
+
+      <div class="card" style="padding:0" id="chart-wrapper">
+        <div class="chart-controls">
+          <span id="chart-symbol-label" class="sym-label">—</span>
+          <div id="chart-stats" class="flex items-center gap-12"></div>
+          <div id="period-buttons" class="flex gap-8" style="margin-left:auto"></div>
+        </div>
+        <!-- Search within chart view -->
+        <div style="padding:8px 16px;display:flex;gap:8px;align-items:center">
+          <input id="chart-search-input" type="text" placeholder="Enter symbol and press Enter…"
+            style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);
+                   color:var(--text-primary);font-family:var(--font-mono);font-size:12px;
+                   outline:none;padding:6px 12px;width:220px"
+            autocomplete="off" autocorrect="off" spellcheck="false" />
+          <span class="text-dim fs-11">e.g. MRNA, NVDA, CRSP</span>
+        </div>
+        <div id="tv-chart"><div class="loading-text" style="padding:80px">Search a symbol to view its chart.</div></div>
+      </div>
+
+      <div class="grid-2">
+        <!-- Why is this stock moving -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Why Is It Moving?</span>
+          </div>
+          <div id="chart-why-panel"><div class="loading-text">Load a chart first.</div></div>
+        </div>
+
+        <!-- Symbol news -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Recent News</span>
+          </div>
+          <div id="chart-news"><div class="loading-text">Load a chart first.</div></div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ── CATALYST CALENDAR VIEW ───────────────────────────────────────────── -->
+    <section id="view-catalyst" class="view">
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:middle;margin-right:6px">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+            Biotech / FDA Catalyst Calendar
+          </span>
+          <div class="flex items-center gap-8">
+            <select id="catalyst-filter-priority"
+              style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);
+                     color:var(--text-primary);font-size:11px;padding:4px 8px;outline:none">
+              <option value="ALL">All Priorities</option>
+              <option value="HIGH">HIGH only</option>
+              <option value="MEDIUM">MEDIUM only</option>
+              <option value="LOW">LOW only</option>
+            </select>
+            <button id="catalyst-refresh-btn" class="card-action">Refresh</button>
+          </div>
+        </div>
+
+        <div id="catalyst-stats" class="flex items-center gap-8" style="margin-bottom:12px"></div>
+
+        <div id="catalyst-list">
+          <div class="loading-text" style="padding:60px">Loading catalyst data…</div>
+        </div>
+      </div>
+
+      <!-- Legend -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Event Type Legend</span>
+        </div>
+        <div id="catalyst-legend"></div>
+      </div>
+
+      <!-- Data sources -->
+      <div class="card" style="background:var(--bg-elevated)">
+        <div class="card-header">
+          <span class="card-title">Data Sources</span>
+        </div>
+        <div class="flex-col gap-8 fs-12 text-muted">
+          <div>
+            <strong style="color:var(--text-primary)">FDA Drug Database</strong>
+            — <a href="https://api.fda.gov/drug/drugsfda.json" target="_blank">api.fda.gov</a>
+            — Real-time NDA/BLA approval actions. No API key required.
+          </div>
+          <div>
+            <strong style="color:var(--text-primary)">SEC EDGAR</strong>
+            — <a href="https://efts.sec.gov/LATEST/search-index" target="_blank">efts.sec.gov</a>
+            — 8-K filings mentioning PDUFA dates, FDA approvals, and CRL letters.
+          </div>
+          <div>
+            <strong style="color:var(--text-primary)">ClinicalTrials.gov</strong>
+            — <a href="https://clinicaltrials.gov/api/v2/studies" target="_blank">clinicaltrials.gov</a>
+            — Phase 3 trials nearing primary endpoint completion.
+          </div>
+          <div>
+            <strong style="color:var(--text-primary)">Yahoo Finance</strong>
+            — via yfinance — Live stock data, short interest, market cap enrichment.
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ── MOMENTUM SCANNER VIEW ─────────────────────────────────────────────── -->
+    <section id="view-momentum" class="view">
+
+      <div class="card" style="padding:12px 16px">
+        <div class="flex items-center justify-between flex-wrap gap-12">
+
+          <!-- Mode toggle -->
+          <div class="flex gap-8">
+            <button class="period-btn active" data-scan-mode="momentum">Momentum</button>
+            <button class="period-btn" data-scan-mode="squeeze">Short Squeeze</button>
+          </div>
+
+          <!-- Stats -->
+          <div id="momentum-stats" class="flex items-center gap-8"></div>
+
+          <!-- Filters -->
+          <div class="flex items-center gap-8">
+            <span class="text-dim fs-11">Min RVOL</span>
+            <select id="rvol-filter"
+              style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);
+                     color:var(--text-primary);font-size:11px;padding:4px 8px;outline:none">
+              <option value="1.5">1.5×</option>
+              <option value="2.0">2.0×</option>
+              <option value="3.0">3.0×</option>
+              <option value="5.0">5.0×</option>
+            </select>
+            <span class="text-dim fs-11">Min Score</span>
+            <select id="score-filter"
+              style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);
+                     color:var(--text-primary);font-size:11px;padding:4px 8px;outline:none">
+              <option value="20">20</option>
+              <option value="35">35</option>
+              <option value="50">50</option>
+              <option value="65">65</option>
+            </select>
+            <button id="momentum-refresh-btn" class="card-action" style="border:1px solid var(--border);padding:4px 10px;border-radius:var(--radius-sm)">
+              Scan Now
+            </button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Methodology note -->
+      <div style="font-size:11px;color:var(--text-dim);padding:0 4px">
+        Score factors: <strong>Relative Volume</strong> (30pts) · <strong>Gap %</strong> (25pts) ·
+        <strong>52-week High proximity</strong> (20pts) · <strong>Short Squeeze setup</strong> (25pts) ·
+        <strong>Day change %</strong> (15pts). Max 100.
+      </div>
+
+      <!-- Momentum grid -->
+      <div id="momentum-scan-panel">
+        <div id="momentum-grid" class="momentum-grid">
+          <div class="loading-text" style="grid-column:1/-1;padding:60px">
+            Click "Scan Now" to find momentum candidates.
+          </div>
+        </div>
+      </div>
+
+      <!-- Squeeze grid (hidden by default) -->
+      <div id="squeeze-scan-panel" class="hidden">
+        <div id="squeeze-grid" class="momentum-grid">
+          <div class="loading-text" style="grid-column:1/-1;padding:60px">
+            Scanning for short squeeze setups…
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ── WHY MOVING VIEW ────────────────────────────────────────────────────── -->
+    <section id="view-why" class="view">
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Market Driver Analysis</span>
+          <button class="card-action" onclick="refreshWhyView()">Refresh</button>
+        </div>
+        <div id="why-full-panel"><div class="loading-text">Analyzing market drivers…</div></div>
+      </div>
+
+      <div class="grid-2">
+        <!-- SPY correlation -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">SPY — S&amp;P 500</span>
+          </div>
+          <div id="why-spy-panel" class="loading-text">Loading…</div>
+        </div>
+        <!-- QQQ correlation -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">QQQ — Nasdaq 100</span>
+          </div>
+          <div id="why-qqq-panel" class="loading-text">Loading…</div>
+        </div>
+      </div>
+
+      <!-- News feed with driver breakdown -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Full Market News (with Sentiment)</span>
+        </div>
+        <div id="why-news-feed"><div class="loading-text">Loading news…</div></div>
+      </div>
+
+    </section>
+
+  </main><!-- #main -->
+
+</div><!-- #app -->
+
+<script type="module">
+import { loadDashboard, initWebSocket } from "/static/js/dashboard.js";
+import { loadChart, initChartView, openChart } from "/static/js/charts.js";
+import { loadCatalysts, initCatalystView } from "/static/js/catalyst.js";
+import { loadMomentumScan, loadSqueezeScan, initMomentumView } from "/static/js/momentum.js";
+import { API, Fmt, changeClass, sentimentBadge } from "/static/js/api.js";
+
+// ── Global openChart (called from tables/cards) ───────────────────────────────
+window.openChart = openChart;
+window.loadDashboard = loadDashboard;
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+const navItems = document.querySelectorAll(".nav-item[data-view]");
+const views    = document.querySelectorAll(".view");
+const loaded   = new Set();
+
+function switchView(viewId) {
+  navItems.forEach(n => n.classList.toggle("active", n.dataset.view === viewId));
+  views.forEach(v => v.classList.toggle("active", v.id === `view-${viewId}`));
+
+  if (loaded.has(viewId)) return;
+  loaded.add(viewId);
+
+  switch (viewId) {
+    case "catalyst": loadCatalysts(); break;
+    case "momentum": /* wait for user to click Scan Now */ break;
+    case "why":      loadWhyView(); break;
+    case "chart":    initChartView(); break;
+  }
+}
+
+navItems.forEach(n => n.addEventListener("click", () => switchView(n.dataset.view)));
+
+// ── Global search box ─────────────────────────────────────────────────────────
+const searchInput = document.getElementById("search-input");
+searchInput.addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter") return;
+  const sym = searchInput.value.trim().toUpperCase();
+  if (!sym) return;
+  searchInput.value = "";
+  openChart(sym);
+});
+
+// ── Why Moving view logic ─────────────────────────────────────────────────────
+async function loadWhyView() {
+  const fullPanel = document.getElementById("why-full-panel");
+  const spyPanel  = document.getElementById("why-spy-panel");
+  const qqqPanel  = document.getElementById("why-qqq-panel");
+  const newsFeed  = document.getElementById("why-news-feed");
+
+  const [corrRes, qqqRes, newsRes] = await Promise.all([
+    API.marketCorrelation(),
+    API.symbolCorrelation("QQQ"),
+    API.marketNews(),
+  ]);
+
+  // SPY correlation
+  if (corrRes.data) {
+    const c = corrRes.data;
+    const confPct = Math.round(c.confidence * 100);
+    const cls = changeClass(c.market_change_pct);
+    fullPanel.innerHTML = `
+      <div class="flex items-center gap-16" style="margin-bottom:12px">
+        <div class="badge badge-blue" style="font-size:13px;padding:4px 12px">${c.driver_label}</div>
+        <div class="mono fw-700 fs-13 ${cls}">${Fmt.pct(c.market_change_pct)} SPY</div>
+      </div>
+      <div style="font-size:15px;color:var(--text-primary);line-height:1.6;margin-bottom:12px">${c.summary}</div>
+      <div class="flex items-center gap-8">
+        <div class="conf-bar" style="max-width:200px">
+          <div class="conf-bar-fill" style="width:${confPct}%"></div>
+        </div>
+        <div class="conf-text">${confPct}% driver confidence</div>
+      </div>
+    `;
+
+    spyPanel.innerHTML = fullPanel.innerHTML;
+  }
+
+  // QQQ correlation
+  if (qqqRes.data) {
+    const c = qqqRes.data;
+    const confPct = Math.round(c.confidence * 100);
+    const cls = changeClass(c.change_pct);
+    qqqPanel.innerHTML = `
+      <div class="driver-label">${c.driver_label}</div>
+      <div style="font-size:13px;color:var(--text-primary);margin:6px 0">${c.summary}</div>
+      <div class="conf-text">${confPct}% confidence · <span class="${cls}">${Fmt.pct(c.change_pct)} QQQ</span></div>
+    `;
+  }
+
+  // Full news feed
+  if (newsRes.data?.length) {
+    newsFeed.innerHTML = newsRes.data.slice(0, 20).map(n => `
+      <div class="news-item" onclick="${n.url ? `window.open('${n.url}','_blank')` : ""}">
+        <div class="news-meta">
+          <span class="news-source">${n.source || "News"}</span>
+          <span class="news-time">${Fmt.timeAgo(n.timestamp)}</span>
+          ${sentimentBadge(n.sentiment_score || 0)}
+          ${n.driver_category && n.driver_category !== "other"
+            ? `<span class="badge badge-blue">${n.driver_category.replace(/_/g," ")}</span>` : ""}
+        </div>
+        <div class="news-headline">${n.headline}</div>
+        ${n.summary ? `<div class="news-summary">${n.summary.substring(0,140)}…</div>` : ""}
+      </div>
+    `).join("");
+  }
+}
+
+window.refreshWhyView = async () => {
+  const fullPanel = document.getElementById("why-full-panel");
+  const spyPanel  = document.getElementById("why-spy-panel");
+  const qqqPanel  = document.getElementById("why-qqq-panel");
+  const newsFeed  = document.getElementById("why-news-feed");
+  if (fullPanel) fullPanel.innerHTML = `<div class="loading-text">Refreshing analysis…</div>`;
+  loaded.delete("why");
+  loadWhyView();
+};
+
+window.refreshCorrelation = async () => {
+  const panel = document.getElementById("why-moving-panel");
+  if (panel) panel.innerHTML = `<div class="loading-text">Refreshing…</div>`;
+  const { data } = await API.marketCorrelation();
+  if (!data) return;
+  const confPct = Math.round(data.confidence * 100);
+  const cls = changeClass(data.market_change_pct);
+  panel.innerHTML = `
+    <div class="flex items-center justify-between" style="margin-bottom:8px">
+      <div class="driver-label">${data.driver_label}</div>
+      <div class="mono fw-700 fs-13 ${cls}">${Fmt.pct(data.market_change_pct)} SPY</div>
+    </div>
+    <div class="driver-summary">${data.summary}</div>
+    <div class="driver-confidence mt-8">
+      <div class="conf-bar"><div class="conf-bar-fill" style="width:${confPct}%"></div></div>
+      <div class="conf-text">${confPct}% confidence</div>
+    </div>
+  `;
+};
+
+// ── Boot sequence ─────────────────────────────────────────────────────────────
+(async () => {
+  // Init specialist views
+  initCatalystView();
+  initMomentumView();
+  initChartView();
+
+  // Load dashboard immediately
+  loaded.add("dashboard");
+  await loadDashboard();
+
+  // Connect WebSocket for live updates
+  initWebSocket();
+})();
+</script>
+</body>
+</html>
