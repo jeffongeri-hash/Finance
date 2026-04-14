@@ -81,7 +81,11 @@ EQUITY_MODEL_PROVIDER: str = os.getenv("EQUITY_MODEL_PROVIDER", "OpenAI")
 # The bridge adds this to sys.path so we can import src.*
 AI_HEDGE_FUND_PATH: str = os.getenv(
     "AI_HEDGE_FUND_PATH",
-    str(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai-hedge-fund")),
+    # Walk up: backend/ → market-catalyst-tracker/ → repo root → ai-hedge-fund/
+    str(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "ai-hedge-fund",
+    )),
 )
 
 # ── Request settings ──────────────────────────────────────────────────────────
