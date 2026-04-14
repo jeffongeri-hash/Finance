@@ -98,6 +98,13 @@
       <span class="sidebar-badge" style="background:var(--green);font-size:9px" id="engine-nav-dot"></span>
     </button>
 
+    <button class="nav-item" data-view="technical">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+      Technical Analysis
+    </button>
+
     <div class="nav-section-label">Analysis</div>
 
     <button class="nav-item" data-view="why">
@@ -670,6 +677,146 @@
 
     </section>
 
+    <!-- ── TECHNICAL ANALYSIS VIEW ──────────────────────────────────────────── -->
+    <section id="view-technical" class="view">
+
+      <!-- Header: ticker input + side toggle -->
+      <div class="card" style="padding:14px 18px">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:200px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;flex-shrink:0;color:var(--text-muted)">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            <span style="font-size:13px;font-weight:700;color:var(--text-primary)" id="ta-ticker-title">—</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex:2;min-width:260px">
+            <input id="ta-ticker-input" type="text" value="NVDA"
+              placeholder="NVDA, AAPL, BTC-USD, ETH-USD…"
+              class="input-field" style="flex:1;font-family:var(--font-mono);font-size:12px" />
+            <button id="ta-run-btn" class="btn btn-primary" style="white-space:nowrap">Analyse</button>
+          </div>
+          <!-- Long / Short toggle -->
+          <div style="display:flex;gap:4px">
+            <button class="btn ta-side-btn active" data-side="long"
+              style="font-size:11px;padding:5px 12px;border:1px solid var(--border)">⬆ Long</button>
+            <button class="btn ta-side-btn" data-side="short"
+              style="font-size:11px;padding:5px 12px;border:1px solid var(--border)">⬇ Short</button>
+          </div>
+          <!-- Quick-pick tickers -->
+          <div style="display:flex;gap:4px;flex-wrap:wrap">
+            <span style="font-size:10px;color:var(--text-dim);align-self:center">Quick:</span>
+            <button class="badge badge-blue" data-ta-ticker="NVDA" style="cursor:pointer;font-size:10px;padding:3px 8px">NVDA</button>
+            <button class="badge" data-ta-ticker="AAPL" style="cursor:pointer;font-size:10px;padding:3px 8px;background:var(--bg-elevated)">AAPL</button>
+            <button class="badge" data-ta-ticker="TSLA" style="cursor:pointer;font-size:10px;padding:3px 8px;background:var(--bg-elevated)">TSLA</button>
+            <button class="badge" data-ta-ticker="SPY"  style="cursor:pointer;font-size:10px;padding:3px 8px;background:var(--bg-elevated)">SPY</button>
+            <button class="badge badge-amber" data-ta-ticker="BTC-USD" style="cursor:pointer;font-size:10px;padding:3px 8px">BTC</button>
+            <button class="badge badge-purple" data-ta-ticker="ETH-USD" style="cursor:pointer;font-size:10px;padding:3px 8px">ETH</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- IV-Based Trade Setup Panel -->
+      <div class="card">
+        <div class="card-header" style="margin-bottom:12px">
+          <span class="card-title">IV-Based Trade Setup</span>
+          <span class="fs-11 text-muted">Stop &amp; target sized by implied volatility — not portfolio %</span>
+        </div>
+        <div id="ta-setup-panel">
+          <div class="loading-text">Enter a ticker and click Analyse</div>
+        </div>
+      </div>
+
+      <!-- ── 1Y DAILY ──────────────────────────────────────────────────────── -->
+      <div class="card">
+        <div class="card-header" style="margin-bottom:8px">
+          <span class="card-title" style="display:flex;align-items:center;gap:8px">
+            <span class="badge badge-blue" style="font-size:10px">1Y</span>
+            Daily Chart — SMA20/50/200 · EMA9/21 · Pivot S/R
+          </span>
+          <span id="ta-score-daily" class="mono fs-11" style="color:var(--text-muted)"></span>
+        </div>
+        <!-- Indicator strip -->
+        <div id="ta-indicators-daily" class="ta-ind-strip"></div>
+        <!-- Chart -->
+        <div id="ta-chart-daily" class="ta-chart-box">
+          <div class="loading-text" style="padding:80px">Enter a ticker and click Analyse</div>
+        </div>
+        <!-- Volume -->
+        <div id="ta-vol-daily" class="ta-vol-box"></div>
+      </div>
+
+      <!-- ── 3M HOURLY ─────────────────────────────────────────────────────── -->
+      <div class="card">
+        <div class="card-header" style="margin-bottom:8px">
+          <span class="card-title" style="display:flex;align-items:center;gap:8px">
+            <span class="badge badge-purple" style="font-size:10px">3M</span>
+            Hourly Chart — EMA9/21 · OBV · Volume Trend · S/R
+          </span>
+          <span id="ta-score-hourly" class="mono fs-11" style="color:var(--text-muted)"></span>
+        </div>
+        <div id="ta-indicators-hourly" class="ta-ind-strip"></div>
+        <div id="ta-chart-hourly" class="ta-chart-box"></div>
+        <div id="ta-vol-hourly" class="ta-vol-box"></div>
+      </div>
+
+      <!-- ── 24H MINUTE ────────────────────────────────────────────────────── -->
+      <div class="card">
+        <div class="card-header" style="margin-bottom:8px">
+          <span class="card-title" style="display:flex;align-items:center;gap:8px">
+            <span class="badge badge-green" style="font-size:10px">1D</span>
+            Minute Chart — EMA9 · VWAP · Volume · Intraday S/R
+          </span>
+          <span id="ta-score-minute" class="mono fs-11" style="color:var(--text-muted)"></span>
+        </div>
+        <div id="ta-indicators-minute" class="ta-ind-strip"></div>
+        <div id="ta-chart-minute" class="ta-chart-box"></div>
+        <div id="ta-vol-minute" class="ta-vol-box"></div>
+      </div>
+
+      <!-- Legend -->
+      <div class="card" style="background:var(--bg-elevated);padding:12px 16px">
+        <div class="card-header" style="margin-bottom:8px">
+          <span class="card-title">Legend &amp; Methodology</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;font-size:11px;color:var(--text-secondary)">
+          <div>
+            <strong style="color:var(--amber)">EMA9</strong> / <strong style="color:#60a5fa">EMA21</strong><br>
+            Short-term momentum. EMA9 > EMA21 = bullish momentum.
+          </div>
+          <div>
+            <strong style="color:#818cf8">SMA20</strong> / <strong style="color:var(--green)">SMA50</strong> / <strong style="color:var(--red)">SMA200</strong><br>
+            Trend structure. Price &gt; all three = full bull trend.
+          </div>
+          <div>
+            <strong style="color:#e879f9">VWAP</strong><br>
+            Intraday fair value. Institutions buy below VWAP.
+          </div>
+          <div>
+            <strong style="color:var(--green)">Support</strong> / <strong style="color:var(--red)">Resistance</strong><br>
+            Swing high/low clusters. Dashed lines on chart.
+          </div>
+          <div>
+            <strong>OBV</strong> — On-Balance Volume<br>
+            Rising OBV on flat price = accumulation (bullish).
+          </div>
+          <div>
+            <strong>IV-Based R/R</strong><br>
+            Stop = max(ATR×1.5, dailyEM×0.75). R/R ratio driven by IV percentile rank — not portfolio %.
+          </div>
+          <div>
+            <strong>IV Percentile (IVP)</strong><br>
+            &lt;25 = cheap vol → 3:1 R/R (hold for move)<br>
+            &gt;75 = expensive → 1.75:1 R/R (tighter target)
+          </div>
+          <div>
+            <strong>Confluence Score</strong> (−6 to +6)<br>
+            Each timeframe contributes ±2 (MA + volume + S/R). ≥+4 = strong long.
+          </div>
+        </div>
+      </div>
+
+    </section>
+
     <!-- ── WHY MOVING VIEW ────────────────────────────────────────────────────── -->
     <section id="view-why" class="view">
 
@@ -719,6 +866,7 @@ import { loadCatalysts, initCatalystView } from "/static/js/catalyst.js";
 import { loadMomentumScan, loadSqueezeScan, initMomentumView } from "/static/js/momentum.js";
 import { loadPredictions, initPredictionsView } from "/static/js/predictions.js";
 import { loadTrading, initTradingView, refreshStats as tradingRefreshStats } from "/static/js/trading.js";
+import { initTechnicalView, loadTechnical } from "/static/js/technical.js";
 import { API, Fmt, changeClass, sentimentBadge } from "/static/js/api.js";
 
 window._tradingRefresh = tradingRefreshStats;
@@ -746,8 +894,12 @@ function switchView(viewId) {
     case "chart":       initChartView(); break;
     case "predictions": loadPredictions(); break;
     case "trading":     loadTrading(); break;
+    case "technical":   loadTechnical(); break;
   }
 }
+
+// init technical view once (wires buttons, doesn't fetch data yet)
+initTechnicalView();
 
 navItems.forEach(n => n.addEventListener("click", () => switchView(n.dataset.view)));
 

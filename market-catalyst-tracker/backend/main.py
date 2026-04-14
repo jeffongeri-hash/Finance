@@ -51,7 +51,9 @@ from trading.penny_scanner import (
     TARGET_POS as PENNY_TARGET, ORDER_SIZE as PENNY_SIZE,
     FULL_RESOLVE_RATE, BOUNCE_RATE, LOSS_RATE,
 )
-from analysis.prediction_scanner import (
+from analysis.technical import get_mtf_analysis
+from analysis.volatility import get_volatility_profile, get_trade_setup
+
     pull_all_prediction_data,
     get_biotech_fda_markets,
     get_macro_markets,
@@ -933,6 +935,105 @@ async def penny_positions():
         "target":     PENNY_TARGET,
         "portfolio_ev": validate_portfolio_ev(pos),
         "timestamp":  int(time.time()),
+    }
+
+
+# ── Technical Analysis Routes ─────────────────────────────────────────────────
+
+@app.get("/api/analysis/technical/{ticker}")
+async def analysis_technical(ticker: str):
+    """
+    Multi-timeframe technical analysis for any equity or crypto ticker.
+
+    Stacks on three timeframes:
+      • 1Y Daily   — SMA20/50/200, EMA9/21, OBV, swing S/R, daily pivots, ATR14
+      • 3M Hourly  — EMA9/21/50, OBV, S/R, ATR14
+      • 24H Minute — EMA9, VWAP, volume trend, ATR14
+
+    Returns:
+      candle data + MA overlay + volume bars for each timeframe (for charting)
+      confluence_score [-6, +6] and direction (STRONG_LONG / LONG / NEUTRAL / SHORT / STRONG_SHORT)
+
+    Results cached 5 minutes (heavy multi-timeframe API call).
+    """
+    key = f"mtf_{ticker.upper()}"
+    return await _acached(key, 300, get_mtf_analysis(ticker))
+
+
+@app.get("/api/analysis/volatility/{ticker}")
+async def analysis_volatility(ticker: str):
+    """
+    Implied volatility profile for equity or crypto.
+
+    For equities: extracts ATM IV from the nearest front-month options chain.
+    For crypto (BTC-USD, ETH-USD…): uses 30-day historical volatility as proxy.
+
+    Returns: iv_annual, iv_percentile (0-100 rank), hv_30, hv_252,
+             atr_14, daily_expected_move, weekly_expected_move.
+    """
+    key = f"vol_{ticker.upper()}"
+    return await _acached(key, 600, get_volatility_profile(ticker))
+
+
+@app.get("/api/analysis/setup/{ticker}")
+async def analysis_trade_setup(
+    ticker: str,
+    side:   str   = Query("long",  description="long or short"),
+    entry:  float = Query(0.0,     description="Entry price (0 = current market price)"),
+):
+    """
+    Complete IV-based trade setup for a ticker.
+
+    Stop distance  = max(ATR×1.5, daily_expected_move×0.75)
+    R:R ratio      = f(IV percentile):
+      IVP  0-25  → 3.0:1   (low vol — hold for a large move)
+      IVP 25-50  → 2.5:1
+      IVP 50-75  → 2.0:1
+      IVP 75-90  → 1.75:1
+      IVP 90+    → 1.5:1   (high vol — tighter, mean-reversion risk)
+
+    Confluence score (from /api/analysis/technical) optionally adjusts R:R by ±0.5.
+    The stop and target are expressed in absolute price, %, AND $ per share.
+    """
+    if side.lower() not in ("long", "short"):
+        raise HTTPException(status_code=400, detail="side must be 'long' or 'short'")
+    return await get_trade_setup(ticker, side, entry)
+
+
+@app.get("/api/analysis/full/{ticker}")
+async def analysis_full(
+    ticker: str,
+    side:   str   = Query("long",  description="long or short"),
+):
+    """
+    Combined endpoint: MTF analysis + volatility profile + trade setup in one call.
+    Runs all three in parallel. Use this to power the full analysis view.
+    """
+    if side.lower() not in ("long", "short"):
+        raise HTTPException(status_code=400, detail="side must be 'long' or 'short'")
+
+    mtf_key = f"mtf_{ticker.upper()}"
+    vol_key = f"vol_{ticker.upper()}"
+
+    mtf_task = _acached(mtf_key, 300, get_mtf_analysis(ticker))
+    vol_task = _acached(vol_key, 600, get_volatility_profile(ticker))
+
+    mtf, vol = await asyncio.gather(mtf_task, vol_task)
+
+    # Build trade setup using confluence score from MTF
+    confluence = mtf.get("confluence_score", 0) if isinstance(mtf, dict) else 0
+    price      = mtf.get("price", 0.0)          if isinstance(mtf, dict) else 0.0
+
+    from analysis.volatility import calc_trade_setup
+    setup = calc_trade_setup(ticker, price, side, vol, confluence) if price and vol else {}
+
+    return {
+        "ticker":    ticker.upper(),
+        "side":      side.lower(),
+        "mtf":       mtf,
+        "vol":       vol,
+        "setup":     setup,
+        "timestamp": int(time.time()),
     }
 
 
