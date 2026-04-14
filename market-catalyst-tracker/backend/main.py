@@ -53,7 +53,7 @@ from trading.penny_scanner import (
 )
 from analysis.technical import get_mtf_analysis
 from analysis.volatility import get_volatility_profile, get_trade_setup
-
+from analysis.prediction_scanner import (
     pull_all_prediction_data,
     get_biotech_fda_markets,
     get_macro_markets,
@@ -61,6 +61,11 @@ from analysis.volatility import get_volatility_profile, get_trade_setup
     get_top_markets_all,
     enrich_catalysts_with_predictions,
     get_market_chart_data,
+)
+from equity.hedge_fund_bridge import (
+    equity_status as _equity_status,
+    list_agents as _list_agents,
+    run_analysis as _run_equity_analysis,
 )
 from data.polymarket_adapter import (
     search_markets as pm_search,
@@ -1117,3 +1122,123 @@ async def ws_prices(websocket: WebSocket):
                 pass
     except WebSocketDisconnect:
         _stream.disconnect(websocket)
+
+
+# ── Equity AI Routes ──────────────────────────────────────────────────────────
+
+@app.get("/api/equity/status")
+async def equity_ai_status():
+    """
+    Check whether the equity AI analyst engine is available.
+
+    Returns availability flags and any missing-configuration warnings.
+    The engine requires:
+      • FINANCIAL_DATASETS_API_KEY — fundamental data for analyst agents
+      • At least one LLM key (OPENAI_API_KEY / ANTHROPIC_API_KEY / GROQ_API_KEY)
+      • langchain + langgraph installed (pip install langchain langgraph langchain-openai)
+    """
+    return _equity_status()
+
+
+@app.get("/api/equity/agents")
+async def equity_agents():
+    """
+    List all available analyst agents with display names, descriptions,
+    investing styles, and ordering index.
+    """
+    agents = _list_agents()
+    return {
+        "agents": agents,
+        "count":  len(agents),
+    }
+
+
+@app.post("/api/equity/analyze")
+async def equity_analyze(
+    tickers:    str  = Query(...,         description="Comma-separated tickers e.g. AAPL,NVDA,TSLA"),
+    analysts:   str  = Query("",          description="Comma-separated agent keys (empty = all agents)"),
+    model:      str  = Query("",          description="LLM model name (default from config)"),
+    provider:   str  = Query("",          description="LLM provider: OpenAI, Anthropic, Groq, DeepSeek"),
+    start_date: str  = Query("",          description="YYYY-MM-DD (default 3 months back)"),
+    end_date:   str  = Query("",          description="YYYY-MM-DD (default today)"),
+    reasoning:  bool = Query(False,       description="Include full agent reasoning text"),
+):
+    """
+    Run the full ai-hedge-fund analyst workflow on the provided tickers.
+
+    Each selected analyst agent independently evaluates every ticker and emits
+    a signal (bullish / bearish / neutral) with a confidence score and reasoning.
+    The portfolio manager then synthesises a final action recommendation.
+
+    Returns:
+      decisions       — portfolio manager's final action per ticker
+      analyst_signals — every agent's raw signal per ticker
+      summary         — per-ticker bull/bear/neutral vote counts
+    """
+    status = _equity_status()
+    if not status["available"]:
+        missing = "; ".join(status["warnings"])
+        raise HTTPException(
+            status_code=503,
+            detail=f"Equity AI unavailable: {missing}",
+        )
+
+    ticker_list   = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    analyst_list  = [a.strip() for a in analysts.split(",") if a.strip()] if analysts else None
+
+    if not ticker_list:
+        raise HTTPException(status_code=400, detail="At least one ticker required")
+    if len(ticker_list) > 10:
+        raise HTTPException(status_code=400, detail="Maximum 10 tickers per request")
+
+    try:
+        result = await _run_equity_analysis(
+            tickers=ticker_list,
+            analysts=analyst_list,
+            model_name=model or None,
+            model_provider=provider or None,
+            start_date=start_date or None,
+            end_date=end_date or None,
+            show_reasoning=reasoning,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("Equity analysis failed")
+        raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
+
+    return result
+
+
+@app.get("/api/equity/analyze/{ticker}")
+async def equity_analyze_single(
+    ticker:   str,
+    analysts: str  = Query("",    description="Comma-separated agent keys (empty = all)"),
+    model:    str  = Query("",    description="LLM model name"),
+    provider: str  = Query("",    description="LLM provider"),
+):
+    """
+    Convenience GET endpoint for a single ticker — same output as POST /api/equity/analyze.
+    Useful for quick lookups without constructing a request body.
+    """
+    status = _equity_status()
+    if not status["available"]:
+        missing = "; ".join(status["warnings"])
+        raise HTTPException(status_code=503, detail=f"Equity AI unavailable: {missing}")
+
+    analyst_list = [a.strip() for a in analysts.split(",") if a.strip()] if analysts else None
+
+    try:
+        result = await _run_equity_analysis(
+            tickers=[ticker.upper()],
+            analysts=analyst_list,
+            model_name=model or None,
+            model_provider=provider or None,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("Equity single-ticker analysis failed")
+        raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
+
+    return result

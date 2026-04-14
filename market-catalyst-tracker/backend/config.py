@@ -62,6 +62,28 @@ FDA_API_BASE = "https://api.fda.gov/drug"
 EDGAR_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 CLINICAL_TRIALS_API = "https://clinicaltrials.gov/api/v2/studies"
 
+# ── Equity AI (ai-hedge-fund integration) ─────────────────────────────────────
+# financialdatasets.ai key — required for fundamental data (prices, metrics,
+# insider trades, news) used by the analyst agents.
+FINANCIAL_DATASETS_API_KEY: str = os.getenv("FINANCIAL_DATASETS_API_KEY", "")
+
+# LLM credentials — at least one provider key required to run analyst agents.
+OPENAI_API_KEY:     str = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY:  str = os.getenv("ANTHROPIC_API_KEY", "")
+GROQ_API_KEY:       str = os.getenv("GROQ_API_KEY", "")
+DEEPSEEK_API_KEY:   str = os.getenv("DEEPSEEK_API_KEY", "")
+
+# Default LLM for equity agents — override with env vars to change provider.
+EQUITY_MODEL_NAME:     str = os.getenv("EQUITY_MODEL_NAME", "gpt-4o-mini")
+EQUITY_MODEL_PROVIDER: str = os.getenv("EQUITY_MODEL_PROVIDER", "OpenAI")
+
+# Absolute path to the cloned ai-hedge-fund repository.
+# The bridge adds this to sys.path so we can import src.*
+AI_HEDGE_FUND_PATH: str = os.getenv(
+    "AI_HEDGE_FUND_PATH",
+    str(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai-hedge-fund")),
+)
+
 # ── Request settings ──────────────────────────────────────────────────────────
 HTTP_TIMEOUT = 20          # seconds
 CACHE_TTL_SECONDS = 300    # 5-minute server-side cache for heavy scans

@@ -13,3 +13,13 @@ websockets==14.1
 fredapi==0.5.2
 nasdaq-data-link==1.0.4
 py-clob-client>=0.16.0
+# ── Equity AI (ai-hedge-fund LangGraph analyst engine) ────────────────────────
+langchain>=0.3.7
+langgraph>=0.2.56
+langchain-core>=0.3.0
+langchain-openai>=0.3.5
+langchain-anthropic>=0.3.5
+langchain-groq>=0.2.3
+python-dateutil>=2.8.2
+colorama>=0.4.6
+tabulate>=0.9.0

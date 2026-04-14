@@ -105,6 +105,13 @@
       Technical Analysis
     </button>
 
+    <button class="nav-item" data-view="equity">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+      </svg>
+      Equity AI
+    </button>
+
     <div class="nav-section-label">Analysis</div>
 
     <button class="nav-item" data-view="why">
@@ -817,6 +824,79 @@
 
     </section>
 
+    <!-- ── EQUITY AI VIEW ───────────────────────────────────────────────────────── -->
+    <section id="view-equity" class="view">
+
+      <!-- Status banner -->
+      <div id="eq-status-panel" class="card" style="margin-bottom:12px;padding:12px 16px"></div>
+
+      <!-- Run controls -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">AI Analyst Engine</span>
+        </div>
+
+        <!-- Ticker input -->
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+          <input id="eq-ticker-input" type="text" class="input-field"
+            placeholder="AAPL, NVDA, TSLA  (comma-separated, max 10)"
+            style="flex:1;min-width:240px;max-width:480px">
+          <button id="eq-run-btn" class="btn-primary">Run Analysis</button>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);cursor:pointer">
+            <input id="eq-reasoning-toggle" type="checkbox">
+            Show reasoning
+          </label>
+        </div>
+
+        <!-- Quick-pick badges -->
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">
+          <span class="badge badge-blue" data-eq-ticker="NVDA" style="cursor:pointer">NVDA</span>
+          <span class="badge badge-blue" data-eq-ticker="AAPL" style="cursor:pointer">AAPL</span>
+          <span class="badge badge-blue" data-eq-ticker="TSLA" style="cursor:pointer">TSLA</span>
+          <span class="badge badge-blue" data-eq-ticker="MSFT" style="cursor:pointer">MSFT</span>
+          <span class="badge badge-blue" data-eq-ticker="AMZN" style="cursor:pointer">AMZN</span>
+          <span class="badge badge-blue" data-eq-ticker="GOOGL" style="cursor:pointer">GOOGL</span>
+          <span class="badge badge-blue" data-eq-ticker="META" style="cursor:pointer">META</span>
+          <span class="badge badge-blue" data-eq-ticker="SPY" style="cursor:pointer">SPY</span>
+        </div>
+
+        <!-- Agent selector -->
+        <div id="eq-agent-selector">
+          <div class="loading-text">Loading analyst agents…</div>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div id="eq-results" style="margin-top:12px"></div>
+
+      <!-- Legend -->
+      <div class="card" style="margin-top:12px">
+        <div class="card-header"><span class="card-title">How It Works</span></div>
+        <div class="ta-legend-grid" style="gap:10px">
+          <div>
+            <strong>19 Analyst Agents</strong><br>
+            Each agent (Warren Buffett, Ben Graham, Michael Burry, Cathie Wood, etc.) independently
+            analyses fundamental data, valuation metrics, insider trades and news for every ticker.
+            They emit a <span class="eq-bull">bullish</span>, <span class="eq-bear">bearish</span>
+            or <span class="eq-neutral">neutral</span> signal with a confidence score.
+          </div>
+          <div>
+            <strong>Portfolio Manager Decision</strong><br>
+            A LangGraph orchestrator aggregates all agent signals and applies risk management
+            constraints to produce a final <strong>BUY / SELL / HOLD / SHORT / COVER</strong>
+            action with quantity and rationale.
+          </div>
+          <div>
+            <strong>Data Sources</strong><br>
+            Financial metrics, prices and insider trades are pulled from
+            <code>financialdatasets.ai</code> (requires <code>FINANCIAL_DATASETS_API_KEY</code>).
+            LLM reasoning uses your configured provider (OpenAI / Anthropic / Groq / DeepSeek).
+          </div>
+        </div>
+      </div>
+
+    </section>
+
     <!-- ── WHY MOVING VIEW ────────────────────────────────────────────────────── -->
     <section id="view-why" class="view">
 
@@ -867,6 +947,7 @@ import { loadMomentumScan, loadSqueezeScan, initMomentumView } from "/static/js/
 import { loadPredictions, initPredictionsView } from "/static/js/predictions.js";
 import { loadTrading, initTradingView, refreshStats as tradingRefreshStats } from "/static/js/trading.js";
 import { initTechnicalView, loadTechnical } from "/static/js/technical.js";
+import { initEquityView, loadEquity } from "/static/js/equity.js";
 import { API, Fmt, changeClass, sentimentBadge } from "/static/js/api.js";
 
 window._tradingRefresh = tradingRefreshStats;
@@ -895,11 +976,13 @@ function switchView(viewId) {
     case "predictions": loadPredictions(); break;
     case "trading":     loadTrading(); break;
     case "technical":   loadTechnical(); break;
+    case "equity":      loadEquity(); break;
   }
 }
 
 // init technical view once (wires buttons, doesn't fetch data yet)
 initTechnicalView();
+initEquityView();
 
 navItems.forEach(n => n.addEventListener("click", () => switchView(n.dataset.view)));
 
