@@ -17,12 +17,16 @@ import { API, Fmt, changeClass } from "/static/js/api.js";
 // ── API helpers ──────────────────────────────────────────────────────────────
 
 Object.assign(API, {
-  tradingStart:  () => API._post("/api/trading/start"),
-  tradingStop:   () => API._post("/api/trading/stop"),
-  tradingStats:  () => API._fetch("/api/trading/stats"),
-  tradingSignals:() => API._fetch("/api/trading/signals"),
-  tradingLog:    () => API._fetch("/api/trading/log"),
-  nasdaqStatus:  () => API._fetch("/api/nasdaq/status"),
+  tradingStart:    () => API._post("/api/trading/start"),
+  tradingStop:     () => API._post("/api/trading/stop"),
+  tradingStats:    () => API._fetch("/api/trading/stats"),
+  tradingSignals:  () => API._fetch("/api/trading/signals"),
+  tradingLog:      () => API._fetch("/api/trading/log"),
+  nasdaqStatus:    () => API._fetch("/api/nasdaq/status"),
+  backtestStatus:  () => API._fetch("/api/backtest/status"),
+  backtestSummary: () => API._fetch("/api/backtest/summary"),
+  backtestResults: (strategy) => API._fetch("/api/backtest/results", strategy ? { strategy } : {}),
+  backtestRunNow:  () => API._post("/api/backtest/run"),
 });
 
 // Generic POST helper (api.js may not have one)
@@ -302,10 +306,90 @@ export async function refreshStats() {
   renderStats(data);
 }
 
+// ── Backtest rendering ────────────────────────────────────────────────────────
+
+function stratColor(avgReturn) {
+  if (avgReturn > 5)  return "var(--green)";
+  if (avgReturn > 0)  return "#6ee7b7";
+  if (avgReturn > -5) return "var(--amber)";
+  return "var(--red)";
+}
+
+async function refreshBacktest() {
+  const summaryEl = document.getElementById("bt-summary-grid");
+  const topEl     = document.getElementById("bt-top-markets");
+  const statusLbl = document.getElementById("bt-status-label");
+
+  // Status
+  const { data: st } = await API.backtestStatus();
+  if (st && statusLbl) {
+    const lastRun = st.last_run
+      ? `Last run: ${new Date(st.last_run * 1000).toLocaleTimeString()}`
+      : "Not yet run";
+    const nextIn = st.next_run_in_s > 0
+      ? ` · next in ${Math.round(st.next_run_in_s / 60)}m`
+      : "";
+    statusLbl.textContent = `${lastRun}${nextIn} · ${st.result_count} results`;
+  }
+
+  const { data } = await API.backtestSummary();
+  if (!data || !data.by_strategy) {
+    if (summaryEl) summaryEl.innerHTML = `<div class="loading-text">Backtest sweep in progress — results appear after first run (~2 min)</div>`;
+    return;
+  }
+
+  // Strategy summary cards
+  if (summaryEl) {
+    const entries = Object.entries(data.by_strategy)
+      .sort((a, b) => b[1].avg_sharpe - a[1].avg_sharpe);
+
+    summaryEl.innerHTML = entries.map(([name, s]) => {
+      const retColor = stratColor(s.avg_return_pct);
+      const isBest   = name === data.best_strategy;
+      return `
+        <div class="engine-stat" style="${isBest ? "border-color:var(--green);box-shadow:0 0 8px rgba(34,197,94,.2)" : ""}">
+          <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">
+            ${name.replace(/_/g," ")}${isBest ? " ⭐" : ""}
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;font-size:11px">
+            <div><span style="color:var(--text-dim)">Ret </span><span class="mono" style="color:${retColor}">${s.avg_return_pct > 0 ? "+" : ""}${s.avg_return_pct}%</span></div>
+            <div><span style="color:var(--text-dim)">Sharpe </span><span class="mono">${s.avg_sharpe}</span></div>
+            <div><span style="color:var(--text-dim)">WR </span><span class="mono">${(s.avg_win_rate * 100).toFixed(0)}%</span></div>
+            <div><span style="color:var(--text-dim)">EV </span><span class="mono" style="color:${s.avg_ev > 0 ? "var(--green)" : "var(--red)"}">$${s.avg_ev.toFixed(2)}</span></div>
+            <div><span style="color:var(--text-dim)">PF </span><span class="mono">${s.avg_profit_factor}×</span></div>
+            <div><span style="color:var(--text-dim)">DD </span><span class="mono" style="color:var(--amber)">${(s.avg_max_drawdown * 100).toFixed(1)}%</span></div>
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:4px">${s.markets_tested} markets · ${(s.positive_ev_pct * 100).toFixed(0)}% +EV</div>
+        </div>`;
+    }).join("");
+  }
+
+  // Top markets
+  if (topEl && data.top_markets?.length) {
+    topEl.innerHTML = `
+      <div class="fs-11 text-muted" style="margin-bottom:6px">Top performing market/strategy combos:</div>
+      <table class="data-table">
+        <thead><tr><th>#</th><th>Market</th><th>Strategy</th><th>Return</th><th>Sharpe</th><th>Trades</th></tr></thead>
+        <tbody>
+          ${data.top_markets.map((r, i) => `
+            <tr>
+              <td class="mono">${i + 1}</td>
+              <td class="mono fs-11" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.market_slug}</td>
+              <td><span class="badge badge-blue" style="font-size:10px">${r.strategy.replace(/_/g," ")}</span></td>
+              <td class="mono" style="color:${stratColor(r.total_return)}">${r.total_return > 0 ? "+" : ""}${r.total_return}%</td>
+              <td class="mono">${r.sharpe}</td>
+              <td class="mono">${r.trades}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  }
+}
+
 export async function initTradingView() {
   // Wire up buttons
   const startBtn = document.getElementById("engine-start-btn");
   const stopBtn  = document.getElementById("engine-stop-btn");
+  const btRunBtn = document.getElementById("bt-run-btn");
 
   if (startBtn) {
     startBtn.addEventListener("click", async () => {
@@ -334,8 +418,30 @@ export async function initTradingView() {
       await refreshStats();
     });
   }
+
+  if (btRunBtn) {
+    btRunBtn.addEventListener("click", async () => {
+      btRunBtn.disabled = true;
+      btRunBtn.textContent = "Running…";
+      await API.backtestRunNow();
+      // Poll until results update
+      let polls = 0;
+      const poll = setInterval(async () => {
+        polls++;
+        await refreshBacktest();
+        const statusLbl = document.getElementById("bt-status-label");
+        if ((statusLbl?.textContent || "").includes("results") || polls > 60) {
+          clearInterval(poll);
+          btRunBtn.disabled = false;
+          btRunBtn.textContent = "Run Now";
+        }
+      }, 5_000);
+    });
+  }
 }
 
 export async function loadTrading() {
-  await refreshStats();
+  await Promise.all([refreshStats(), refreshBacktest()]);
+  // Refresh backtest display every 5 min while view is loaded
+  setInterval(refreshBacktest, 5 * 60 * 1000);
 }

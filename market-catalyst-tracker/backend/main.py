@@ -36,6 +36,11 @@ from analysis.catalyst_scanner import scan_catalysts
 from analysis.momentum_scanner import run_momentum_scan, run_squeeze_scan
 from trading.engine import create_engine, get_engine
 from trading.signals import run_signal_scan
+from trading.backtester import (
+    create_backtest_runner, get_backtest_runner,
+    run_full_backtest, backtest_market, aggregate_results,
+    STRATEGY_REGISTRY,
+)
 from analysis.prediction_scanner import (
     pull_all_prediction_data,
     get_biotech_fda_markets,
@@ -207,8 +212,8 @@ async def market_movers(limit: int = Query(10, ge=1, le=50)):
 @app.get("/api/charts/{symbol}")
 async def get_chart_data(
     symbol: str,
-    period: str = Query("3mo", regex=r"^(\d+[dmyDMY]|1mo|3mo|6mo|1y|2y|5y|max)$"),
-    interval: str = Query("1d", regex=r"^(1m|5m|15m|30m|1h|1d|1wk|1mo)$"),
+    period: str = Query("3mo", pattern=r"^(\d+[dmyDMY]|1mo|3mo|6mo|1y|2y|5y|max)$"),
+    interval: str = Query("1d", pattern=r"^(1m|5m|15m|30m|1h|1d|1wk|1mo)$"),
 ):
     """OHLCV candle data formatted for TradingView lightweight-charts."""
     loop = asyncio.get_event_loop()
@@ -284,7 +289,7 @@ async def symbol_news_correlation(symbol: str):
 
 @app.get("/api/catalysts/biotech", response_model=List[CatalystEvent])
 async def biotech_catalysts(
-    priority: Optional[str] = Query(None, regex="^(HIGH|MEDIUM|LOW)$"),
+    priority: Optional[str] = Query(None, pattern="^(HIGH|MEDIUM|LOW)$"),
 ):
     """
     Upcoming biotech / FDA catalysts from:
@@ -432,7 +437,7 @@ async def prediction_price_history(token_id: str):
 
 @app.get("/api/catalysts/biotech/enriched")
 async def biotech_catalysts_enriched(
-    priority: Optional[str] = Query(None, regex="^(HIGH|MEDIUM|LOW)$"),
+    priority: Optional[str] = Query(None, pattern="^(HIGH|MEDIUM|LOW)$"),
     limit: int = Query(20, ge=1, le=50),
 ):
     """
@@ -523,6 +528,9 @@ async def startup():
     )
     # Create paper trading engine (auto-starts signal scanning on first /api/trading/start)
     create_engine(initial_balance=10_000.0)
+    # Start continuous backtester — runs every 30 min, results available immediately
+    runner = create_backtest_runner(interval_s=1800)
+    await runner.start()
 
 
 # ── Trading Engine Routes ─────────────────────────────────────────────────────
@@ -594,6 +602,107 @@ async def trading_log():
     if not engine:
         return {"log": []}
     return {"log": engine.get_log()[-50:], "timestamp": int(time.time())}
+
+
+# ── Backtester Routes ─────────────────────────────────────────────────────────
+
+@app.get("/api/backtest/status")
+async def backtest_status():
+    """Current state of the continuous backtester loop."""
+    runner = get_backtest_runner()
+    if not runner:
+        return {"running": False, "note": "Backtester not initialized"}
+    return runner.get_status()
+
+
+@app.get("/api/backtest/summary")
+async def backtest_summary():
+    """
+    Aggregated strategy performance across all replayed markets.
+    Returns avg Sharpe, avg return, win rate, expected value per strategy.
+    Updated every 30 minutes automatically.
+    """
+    runner = get_backtest_runner()
+    if not runner:
+        return {"error": "Backtester not initialized"}
+    summary = runner.get_summary()
+    if not summary.get("by_strategy"):
+        return {
+            "note": "Backtest still running — check back in a moment",
+            "status": runner.get_status(),
+        }
+    return summary
+
+
+@app.get("/api/backtest/results")
+async def backtest_results(
+    strategy: Optional[str] = Query(None, description="Filter by strategy name"),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """
+    Raw per-market backtest results sorted by total return.
+    Optional ?strategy= filter to see one strategy across all markets.
+    """
+    runner = get_backtest_runner()
+    if not runner:
+        return {"results": [], "count": 0}
+    rows = runner.get_results()
+    if strategy:
+        rows = [r for r in rows if r["strategy"] == strategy]
+    rows = sorted(rows, key=lambda r: r["total_return"], reverse=True)[:limit]
+    return {"results": rows, "count": len(rows), "strategies": list(STRATEGY_REGISTRY.keys())}
+
+
+@app.post("/api/backtest/run")
+async def backtest_run_now():
+    """
+    Trigger an immediate backtest sweep (non-blocking — runs in background).
+    """
+    runner = get_backtest_runner()
+    if not runner:
+        raise HTTPException(status_code=503, detail="Backtester not initialized")
+    asyncio.create_task(runner._run_once())
+    return {"triggered": True, "message": "Backtest sweep started — poll /api/backtest/status"}
+
+
+@app.get("/api/backtest/market/{token_id}")
+async def backtest_single_market(
+    token_id: str,
+    strategy: str = Query("mean_reversion"),
+    slug: str = Query("unknown"),
+):
+    """
+    Run a single strategy against a single market on-demand.
+    token_id: Polymarket YES token ID (from /api/predictions/*)
+    strategy: one of mean_reversion | breakout | panic_fade | threshold_momentum |
+              ema_crossover | vwap_reversion | deep_value
+    """
+    if strategy not in STRATEGY_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown strategy. Valid: {list(STRATEGY_REGISTRY.keys())}"
+        )
+    result = await backtest_market(slug, token_id, strategy_name=strategy)
+    if not result:
+        return {
+            "error": "Insufficient price history (need ≥30 bars)",
+            "token_id": token_id,
+            "strategy": strategy,
+        }
+    return {
+        "strategy":      result.strategy,
+        "market_slug":   result.market_slug,
+        "bars_replayed": result.bars_replayed,
+        "trades":        result.trades,
+        "win_rate":      result.win_rate,
+        "total_return":  result.total_return,
+        "sharpe":        result.sharpe,
+        "max_drawdown":  result.max_drawdown,
+        "avg_duration":  result.avg_duration,
+        "profit_factor": result.profit_factor,
+        "expected_value":result.expected_value,
+        "config":        result.config,
+    }
 
 
 # ── Nasdaq Data Link ──────────────────────────────────────────────────────────

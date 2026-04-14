@@ -580,6 +580,25 @@
         </div>
       </div>
 
+      <!-- Backtest results -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Strategy Backtest Results</span>
+          <div class="flex items-center gap-8">
+            <span id="bt-status-label" class="fs-11 text-muted">Loading…</span>
+            <button class="card-action" id="bt-run-btn" style="border:1px solid var(--border);padding:4px 10px;border-radius:var(--radius-sm)">Run Now</button>
+          </div>
+        </div>
+        <div class="fs-11 text-muted" style="margin-bottom:10px">
+          Ported from <strong style="color:var(--text-primary)">prediction-market-backtesting</strong> (NautilusTrader strategies) —
+          replayed against Polymarket CLOB price history. Updates every 30 min.
+        </div>
+        <div id="bt-summary-grid" class="engine-stats-strip">
+          <div class="loading-text" style="grid-column:1/-1">Waiting for first backtest sweep…</div>
+        </div>
+        <div id="bt-top-markets" style="margin-top:12px"></div>
+      </div>
+
       <!-- Risk parameter reference -->
       <div class="card" style="background:var(--bg-elevated);padding:12px 16px">
         <div class="card-header" style="margin-bottom:8px">
