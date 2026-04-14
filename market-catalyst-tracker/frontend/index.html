@@ -123,6 +123,16 @@
       Why Moving?
     </button>
 
+    <div class="nav-section-label" style="margin-top:auto">System</div>
+
+    <button class="nav-item" data-view="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      Settings
+    </button>
+
   </nav>
 
   <!-- ══════════════════════════════════════════ MAIN ═════════════════════════ -->
@@ -935,6 +945,42 @@
 
     </section>
 
+    <!-- ── SETTINGS VIEW ────────────────────────────────────────────────────── -->
+    <section id="view-settings" class="view">
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+          <span class="card-title">Launch Readiness</span>
+          <button class="card-action" onclick="window._settingsRefresh && window._settingsRefresh()">Refresh</button>
+        </div>
+        <div id="st-checklist"><div class="loading-text">Checking status…</div></div>
+        <div style="margin-top:10px;font-size:11px;color:var(--text-muted)">
+          Keys are stored in: <code id="st-env-path">…/backend/.env</code>
+          &nbsp;·&nbsp; Changes take effect immediately (no restart needed).
+        </div>
+      </div>
+
+      <div id="st-key-forms"><div class="loading-text">Loading configuration…</div></div>
+
+      <!-- Security notice -->
+      <div class="card" style="margin-top:12px;border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.04)">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <span style="font-size:18px">⚠</span>
+          <div style="font-size:12px;color:var(--text-muted);line-height:1.7">
+            <strong style="color:var(--text-secondary)">Security note:</strong>
+            API keys are stored in a local <code>.env</code> file on your server and are never
+            transmitted over the network beyond this local connection.
+            Sensitive keys (private keys, API tokens) are masked after saving — only a short
+            preview is shown. Do not expose this Settings page on a public network.
+            <br><br>
+            For Polymarket live trading: your <code>POLY_PRIVATE_KEY</code> is your Polygon
+            wallet key. Ensure you only fund it with the amount you're willing to trade.
+          </div>
+        </div>
+      </div>
+
+    </section>
+
   </main><!-- #main -->
 
 </div><!-- #app -->
@@ -948,6 +994,7 @@ import { loadPredictions, initPredictionsView } from "/static/js/predictions.js"
 import { loadTrading, initTradingView, refreshStats as tradingRefreshStats } from "/static/js/trading.js";
 import { initTechnicalView, loadTechnical } from "/static/js/technical.js";
 import { initEquityView, loadEquity } from "/static/js/equity.js";
+import { initSettingsView, loadSettings } from "/static/js/settings.js";
 import { API, Fmt, changeClass, sentimentBadge } from "/static/js/api.js";
 
 window._tradingRefresh = tradingRefreshStats;
@@ -977,12 +1024,17 @@ function switchView(viewId) {
     case "trading":     loadTrading(); break;
     case "technical":   loadTechnical(); break;
     case "equity":      loadEquity(); break;
+    case "settings":    loadSettings(); break;
   }
 }
 
-// init technical view once (wires buttons, doesn't fetch data yet)
+// init views that need one-time wiring before first data load
 initTechnicalView();
 initEquityView();
+initSettingsView();
+
+// expose settings refresh for the card action button
+window._settingsRefresh = loadSettings;
 
 navItems.forEach(n => n.addEventListener("click", () => switchView(n.dataset.view)));
 

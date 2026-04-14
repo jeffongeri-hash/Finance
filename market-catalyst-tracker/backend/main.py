@@ -8,8 +8,10 @@ Run: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
 from __future__ import annotations
 import asyncio
+import importlib
 import json
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -1242,3 +1244,310 @@ async def equity_analyze_single(
         raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
 
     return result
+
+
+# ── Settings Routes ───────────────────────────────────────────────────────────
+
+# All keys managed through the Settings UI, grouped by subsystem.
+# Sensitive keys are write-only — we return a boolean "is_set", never the value.
+
+_ENV_FILE = Path(__file__).parent / ".env"
+
+# Key definitions: (env_var, display_label, sensitive, placeholder)
+_KEY_DEFS = {
+    # ── Market Data ──────────────────────────────────────────────────────────
+    "FINNHUB_API_KEY": {
+        "group":       "Market Data",
+        "label":       "Finnhub API Key",
+        "sensitive":   True,
+        "placeholder": "Enables real-time stock news & analyst recommendations",
+        "docs_url":    "https://finnhub.io",
+    },
+    "FRED_API_KEY": {
+        "group":       "Market Data",
+        "label":       "FRED API Key",
+        "sensitive":   True,
+        "placeholder": "Federal Reserve macro indicators (yield curve, CPI, etc.)",
+        "docs_url":    "https://fred.stlouisfed.org/docs/api/api_key.html",
+    },
+    "NASDAQ_DATA_LINK_API_KEY": {
+        "group":       "Market Data",
+        "label":       "Nasdaq Data Link API Key",
+        "sensitive":   True,
+        "placeholder": "FINRA short interest, EOD history, macro data",
+        "docs_url":    "https://data.nasdaq.com/account/profile",
+    },
+    # ── Polymarket Live Trading ──────────────────────────────────────────────
+    "POLY_PRIVATE_KEY": {
+        "group":       "Polymarket Live Trading",
+        "label":       "Polygon Wallet Private Key",
+        "sensitive":   True,
+        "placeholder": "0x… — Polygon mainnet wallet that holds USDC",
+        "docs_url":    "https://docs.polymarket.com",
+    },
+    "POLY_FUNDER": {
+        "group":       "Polymarket Live Trading",
+        "label":       "Polymarket Funder Address",
+        "sensitive":   False,
+        "placeholder": "0x… — proxy/funder address shown in Polymarket wallet",
+        "docs_url":    "https://docs.polymarket.com",
+    },
+    "POLY_HOST": {
+        "group":       "Polymarket Live Trading",
+        "label":       "CLOB Host (optional)",
+        "sensitive":   False,
+        "placeholder": "https://clob.polymarket.com  (leave blank for default)",
+        "docs_url":    "https://docs.polymarket.com",
+    },
+    # ── Equity AI ────────────────────────────────────────────────────────────
+    "FINANCIAL_DATASETS_API_KEY": {
+        "group":       "Equity AI",
+        "label":       "Financial Datasets API Key",
+        "sensitive":   True,
+        "placeholder": "financialdatasets.ai — prices, metrics, insider trades",
+        "docs_url":    "https://financialdatasets.ai",
+    },
+    "OPENAI_API_KEY": {
+        "group":       "Equity AI",
+        "label":       "OpenAI API Key",
+        "sensitive":   True,
+        "placeholder": "sk-… — GPT-4o-mini recommended for cost/speed",
+        "docs_url":    "https://platform.openai.com/api-keys",
+    },
+    "ANTHROPIC_API_KEY": {
+        "group":       "Equity AI",
+        "label":       "Anthropic API Key",
+        "sensitive":   True,
+        "placeholder": "sk-ant-… — Claude Haiku for fast + cheap analysis",
+        "docs_url":    "https://console.anthropic.com",
+    },
+    "GROQ_API_KEY": {
+        "group":       "Equity AI",
+        "label":       "Groq API Key",
+        "sensitive":   True,
+        "placeholder": "gsk_… — fastest & free tier available",
+        "docs_url":    "https://console.groq.com",
+    },
+    "DEEPSEEK_API_KEY": {
+        "group":       "Equity AI",
+        "label":       "DeepSeek API Key",
+        "sensitive":   True,
+        "placeholder": "Very cheap per-token pricing",
+        "docs_url":    "https://platform.deepseek.com",
+    },
+    "EQUITY_MODEL_NAME": {
+        "group":       "Equity AI",
+        "label":       "Model Name (optional)",
+        "sensitive":   False,
+        "placeholder": "gpt-4o-mini  (default)",
+        "docs_url":    "",
+    },
+    "EQUITY_MODEL_PROVIDER": {
+        "group":       "Equity AI",
+        "label":       "Model Provider (optional)",
+        "sensitive":   False,
+        "placeholder": "OpenAI  (OpenAI / Anthropic / Groq / DeepSeek)",
+        "docs_url":    "",
+    },
+}
+
+
+def _read_env_file() -> dict[str, str]:
+    """Read the .env file into a dict. Returns {} if file doesn't exist."""
+    env: dict[str, str] = {}
+    if not _ENV_FILE.exists():
+        return env
+    for line in _ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
+
+
+def _write_env_file(env: dict[str, str]) -> None:
+    """Write a dict back to the .env file, preserving comments and order."""
+    existing_lines: list[str] = []
+    if _ENV_FILE.exists():
+        existing_lines = _ENV_FILE.read_text().splitlines()
+
+    # Build updated set of key=value lines, preserving comments
+    written: set[str] = set()
+    output: list[str] = []
+    for line in existing_lines:
+        stripped = line.strip()
+        if stripped.startswith("#") or not stripped:
+            output.append(line)
+            continue
+        if "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in env:
+                if env[key]:   # only write if value non-empty
+                    output.append(f'{key}={env[key]}')
+                else:
+                    output.append(line)  # keep existing if new value blank
+                written.add(key)
+            else:
+                output.append(line)
+        else:
+            output.append(line)
+
+    # Append any new keys not already in file
+    for key, value in env.items():
+        if key not in written and value:
+            output.append(f'{key}={value}')
+
+    _ENV_FILE.write_text("\n".join(output) + "\n")
+
+
+def _reload_config() -> None:
+    """Reload config module and re-export updated values into this module's globals."""
+    import config as cfg
+    importlib.reload(cfg)
+    # Refresh env vars in os.environ from reloaded config
+    mapping = {
+        "FINNHUB_API_KEY":            getattr(cfg, "FINNHUB_API_KEY", ""),
+        "FRED_API_KEY":               getattr(cfg, "FRED_API_KEY", ""),
+        "NASDAQ_DATA_LINK_API_KEY":   getattr(cfg, "NASDAQ_DATA_LINK_API_KEY", ""),
+        "POLY_PRIVATE_KEY":           getattr(cfg, "POLY_PRIVATE_KEY", ""),
+        "POLY_FUNDER":                getattr(cfg, "POLY_FUNDER", ""),
+        "POLY_HOST":                  getattr(cfg, "POLY_HOST", ""),
+        "FINANCIAL_DATASETS_API_KEY": getattr(cfg, "FINANCIAL_DATASETS_API_KEY", ""),
+        "OPENAI_API_KEY":             getattr(cfg, "OPENAI_API_KEY", ""),
+        "ANTHROPIC_API_KEY":          getattr(cfg, "ANTHROPIC_API_KEY", ""),
+        "GROQ_API_KEY":               getattr(cfg, "GROQ_API_KEY", ""),
+        "DEEPSEEK_API_KEY":           getattr(cfg, "DEEPSEEK_API_KEY", ""),
+        "EQUITY_MODEL_NAME":          getattr(cfg, "EQUITY_MODEL_NAME", ""),
+        "EQUITY_MODEL_PROVIDER":      getattr(cfg, "EQUITY_MODEL_PROVIDER", ""),
+    }
+    for k, v in mapping.items():
+        if v:
+            os.environ[k] = v
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """
+    Return all configurable keys with their current status.
+    Sensitive keys return is_set=True/False and a masked preview — never the raw value.
+    Non-sensitive keys (addresses, model names) return the actual value.
+    """
+    env = _read_env_file()
+    # Also check os.environ as fallback (keys may have been set at shell level)
+    combined = {k: (os.environ.get(k, "") or env.get(k, "")) for k in _KEY_DEFS}
+
+    result: dict[str, dict] = {}
+    for key, meta in _KEY_DEFS.items():
+        val = combined.get(key, "")
+        is_set = bool(val)
+        if meta["sensitive"]:
+            display_value = f"{val[:4]}…{val[-4:]}" if len(val) > 10 else ("••••••••" if is_set else "")
+        else:
+            display_value = val
+        result[key] = {
+            "group":         meta["group"],
+            "label":         meta["label"],
+            "sensitive":     meta["sensitive"],
+            "placeholder":   meta["placeholder"],
+            "docs_url":      meta["docs_url"],
+            "is_set":        is_set,
+            "display_value": display_value,
+        }
+    return {
+        "keys":      result,
+        "env_file":  str(_ENV_FILE),
+        "timestamp": int(time.time()),
+    }
+
+
+@app.post("/api/settings")
+async def save_settings(payload: Dict[str, str]):
+    """
+    Save one or more API keys to the .env file.
+    Only keys listed in _KEY_DEFS are accepted. Empty-string values are ignored
+    (they won't overwrite an existing key). To clear a key, use DELETE /api/settings/{key}.
+
+    After writing, config is reloaded so the running server picks up the new values
+    immediately — no restart required.
+    """
+    unknown = [k for k in payload if k not in _KEY_DEFS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown keys: {unknown}")
+
+    env = _read_env_file()
+    updated: list[str] = []
+    for key, value in payload.items():
+        value = value.strip()
+        if value:
+            env[key] = value
+            updated.append(key)
+
+    if updated:
+        _write_env_file(env)
+        _reload_config()
+
+    return {
+        "ok":      True,
+        "updated": updated,
+        "message": f"Saved {len(updated)} key(s). Changes are live immediately.",
+    }
+
+
+@app.delete("/api/settings/{key}")
+async def delete_setting(key: str):
+    """Remove a key from the .env file."""
+    if key not in _KEY_DEFS:
+        raise HTTPException(status_code=400, detail=f"Unknown key: {key}")
+    env = _read_env_file()
+    if key in env:
+        del env[key]
+        _write_env_file(env)
+        _reload_config()
+        return {"ok": True, "message": f"{key} removed."}
+    return {"ok": True, "message": f"{key} was not set."}
+
+
+@app.get("/api/settings/status")
+async def settings_system_status():
+    """
+    Quick health-check for all three subsystems based on currently configured keys.
+    Used by the Settings page to show a launch readiness checklist.
+    """
+    env = {k: (os.environ.get(k, "") or "") for k in _KEY_DEFS}
+
+    poly_ready   = bool(env.get("POLY_PRIVATE_KEY") and env.get("POLY_FUNDER"))
+    eq_data_ready = bool(env.get("FINANCIAL_DATASETS_API_KEY"))
+    eq_llm_ready  = any(env.get(k) for k in (
+        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY"
+    ))
+
+    equity_status_detail = _equity_status()
+
+    return {
+        "paper_trading": {
+            "ready":   True,
+            "label":   "Paper Trading & Backtester",
+            "message": "Always available — no keys required",
+        },
+        "polymarket_live": {
+            "ready":   poly_ready,
+            "label":   "Polymarket Live Trading",
+            "message": "Ready" if poly_ready else "Requires POLY_PRIVATE_KEY + POLY_FUNDER",
+        },
+        "equity_ai": {
+            "ready":   equity_status_detail["available"],
+            "label":   "Equity AI Analyst Engine",
+            "message": (
+                f"Ready — {equity_status_detail['model_name']} via {equity_status_detail['model_provider']}"
+                if equity_status_detail["available"]
+                else "; ".join(equity_status_detail.get("warnings", ["Not configured"]))
+            ),
+        },
+        "market_data": {
+            "finnhub":  bool(env.get("FINNHUB_API_KEY")),
+            "fred":     bool(env.get("FRED_API_KEY")),
+            "nasdaq":   bool(env.get("NASDAQ_DATA_LINK_API_KEY")),
+        },
+        "timestamp": int(time.time()),
+    }

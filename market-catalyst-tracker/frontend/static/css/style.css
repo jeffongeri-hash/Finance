@@ -1163,3 +1163,44 @@ details > summary::-webkit-details-marker {
   cursor:pointer; transition:all 0.15s;
 }
 .btn-xs:hover { border-color:#6366f1; color:#6366f1; }
+
+/* ═══════════════════════════════════════════════════════════════
+   SETTINGS VIEW
+   ═══════════════════════════════════════════════════════════════ */
+
+.st-dot       { display:inline-block; width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.st-dot-green { background:#22c55e; box-shadow:0 0 5px rgba(34,197,94,0.6); }
+.st-dot-red   { background:#ef4444; box-shadow:0 0 5px rgba(239,68,68,0.4); }
+.st-dot-amber { background:#f59e0b; box-shadow:0 0 5px rgba(245,158,11,0.4); }
+
+/* Launch checklist */
+.st-check-row   { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.04); }
+.st-check-row:last-child { border-bottom:none; }
+.st-check-label { font-weight:600; font-size:13px; min-width:220px; }
+.st-check-msg   { font-size:12px; color:var(--text-secondary); }
+
+/* Key group cards */
+.st-group-card  { margin-bottom:12px; }
+
+.st-key-row     { padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.04); }
+.st-key-row:last-of-type { border-bottom:none; }
+
+.st-key-header  { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.st-key-label   { font-size:13px; font-weight:500; color:var(--text-primary); flex:1; }
+.st-docs-link   { font-size:11px; color:#6366f1; text-decoration:none; }
+.st-docs-link:hover { text-decoration:underline; }
+
+.st-key-input-row { display:flex; gap:8px; align-items:center; }
+.st-input         { flex:1; font-family:var(--font-mono); font-size:12px; }
+.st-masked        { font-size:11px; color:var(--text-muted); font-family:var(--font-mono); margin-top:4px; }
+
+.st-clear-btn     { color:var(--text-muted); flex-shrink:0; }
+.st-clear-btn:hover { color:#ef4444; border-color:#ef4444; }
+
+/* Save feedback */
+.st-save-feedback     { font-size:12px; margin-left:12px; }
+.st-feedback-ok       { color:#22c55e; }
+.st-feedback-err      { color:#ef4444; }
+
+/* Nav bottom pin */
+.nav-section-label[style*="margin-top:auto"] { margin-top:auto; }
