@@ -5,6 +5,7 @@
  */
 
 import { API, Fmt, priorityBadge, eventTypeBadge, changeClass } from "./api.js";
+import {} from "./predictions.js";  // side-effect: attaches API.catalysts_enriched
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const catalystList   = document.getElementById("catalyst-list");
@@ -28,12 +29,27 @@ function renderStats(events) {
   `;
 }
 
+function renderPMCell(pm) {
+  if (!pm) return `<div class="text-dim fs-11">—</div>`;
+  const yes = pm.yes_price;
+  const color = yes >= 0.70 ? "var(--green)" : yes >= 0.40 ? "var(--amber)" : "var(--red)";
+  const pctStr = yes != null ? `${Math.round(yes * 100)}%` : "—";
+  const pmUrl  = pm.url || `https://polymarket.com/event/${pm.slug}`;
+  return `
+    <div style="display:flex;flex-direction:column;gap:3px">
+      <div style="font-family:var(--font-mono);font-size:15px;font-weight:800;color:${color}">${pctStr} YES</div>
+      <div class="fs-10 text-dim">$${pm.volume >= 1e6 ? (pm.volume/1e6).toFixed(1)+"M" : pm.volume >= 1e3 ? (pm.volume/1e3).toFixed(0)+"K" : "—"} vol</div>
+      <a href="${pmUrl}" target="_blank" onclick="event.stopPropagation()" class="fs-10" style="color:var(--purple)">Polymarket ↗</a>
+    </div>
+  `;
+}
+
 function renderCatalystRow(ev) {
   const priceChgCls = changeClass(ev.price_change_pct || 0);
   const daysVal = ev.days_until;
   const daysClass = daysVal != null && daysVal <= 7 ? "pos" :
                     daysVal != null && daysVal <= 30 ? "" : "text-muted";
-  const hasCap = ev.market_cap && ev.market_cap > 0;
+  const pm = ev.prediction_market || null;   // from enriched endpoint
 
   return `
     <div class="catalyst-row" data-symbol="${ev.symbol}" onclick="window.openChart && window.openChart('${ev.symbol}')">
@@ -66,11 +82,8 @@ function renderCatalystRow(ev) {
           : ""}
       </div>
 
-      <div>
-        ${ev.short_interest_pct != null
-          ? `<div class="mono fs-12">${ev.short_interest_pct.toFixed(1)}% SI</div>`
-          : `<div class="text-dim fs-11">—</div>`}
-      </div>
+      <div>${renderPMCell(pm)}</div>
+
     </div>
   `;
 }
@@ -83,7 +96,7 @@ function renderCatalystHeader() {
       <div class="fs-10 fw-700" style="letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim)">Description</div>
       <div class="fs-10 fw-700" style="letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim)">Countdown</div>
       <div class="fs-10 fw-700" style="letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim)">Price</div>
-      <div class="fs-10 fw-700" style="letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim)">Short Int</div>
+      <div class="fs-10 fw-700" style="letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);color:var(--purple)">Polymarket %</div>
     </div>
   `;
 }
@@ -141,7 +154,18 @@ export async function loadCatalysts() {
 
   renderLegend();
 
-  const { data, error } = await API.biotechCatalysts();
+  // Try enriched endpoint first (includes Polymarket odds); fall back to plain
+  let data, error;
+  ({ data, error } = await (API.catalysts_enriched
+    ? API.catalysts_enriched(null, 30)
+    : API.biotechCatalysts()));
+
+  // catalysts_enriched returns {events: [...]} shape
+  if (data && data.events) data = data.events;
+
+  if (error || !data) {
+    ({ data, error } = await API.biotechCatalysts());
+  }
 
   if (error) {
     catalystList.innerHTML = `

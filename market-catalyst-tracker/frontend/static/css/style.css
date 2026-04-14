@@ -692,6 +692,118 @@ body {
   padding: 24px;
 }
 
+/* ── Prediction Market cards ─────────────────────────────────────────────────── */
+
+.pm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.pm-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s;
+}
+
+.pm-card:hover { border-color: var(--purple); }
+
+.pm-card-top {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pm-question {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pm-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.pm-prob-bar {
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  display: flex;
+  background: var(--red-dim);
+}
+
+.pm-prob-yes {
+  height: 100%;
+  border-radius: 999px 0 0 999px;
+  transition: width 0.4s ease;
+}
+
+.pm-prob-no {
+  height: 100%;
+  background: rgba(239,68,68,0.25);
+}
+
+.pm-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.pm-stat { display: flex; flex-direction: column; gap: 2px; }
+
+.pm-stat-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.pm-stat-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pm-link {
+  font-size: 11px;
+  color: var(--purple);
+  text-decoration: none;
+  margin-top: auto;
+}
+.pm-link:hover { text-decoration: underline; }
+
+/* Search results */
+.pm-search-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.pm-search-row:last-child { border-bottom: none; }
+.pm-search-q {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.pm-search-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 /* ── Scrollbars ──────────────────────────────────────────────────────────────── */
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -730,3 +842,60 @@ button { cursor: pointer; }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+/* ── Trading Engine Dashboard ─────────────────────────────────────────── */
+
+.engine-stats-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.engine-stat {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  min-width: 100px;
+  text-align: center;
+  flex: 1;
+}
+
+.engine-stat-val {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.engine-stat-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+#engine-log {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.badge-purple {
+  background: rgba(167, 139, 250, 0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(167, 139, 250, 0.3);
+}
+
+.badge-amber {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.badge-red {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}

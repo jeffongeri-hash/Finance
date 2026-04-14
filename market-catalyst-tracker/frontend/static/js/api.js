@@ -21,6 +21,21 @@ async function _get(path, params = {}) {
 }
 
 export const API = {
+  // Internal helpers used by extension modules
+  _fetch: (path, params) => _get(path, params),
+  _post:  async (path) => {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        return { data: null, error: err.detail || `HTTP ${res.status}` };
+      }
+      return { data: await res.json(), error: null };
+    } catch (e) {
+      return { data: null, error: e.message };
+    }
+  },
+
   // Market overview
   marketOverview: () => _get("/api/market/overview"),
   marketMovers: (limit = 10) => _get("/api/market/movers", { limit }),
@@ -143,6 +158,13 @@ export const Fmt = {
     if (!str) return "—";
     try { return new Date(str).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
     catch { return str; }
+  },
+  num: (v, decimals = 2) => {
+    if (v == null || isNaN(v)) return "—";
+    return Number(v).toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
   },
   rvol: (v) => {
     if (v == null) return "—";

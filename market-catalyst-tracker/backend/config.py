@@ -10,6 +10,8 @@ load_dotenv()
 
 FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
 FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
+# Nasdaq Data Link (formerly Quandl) — enables FINRA short interest, EOD history, FRED macro
+NASDAQ_DATA_LINK_API_KEY: str = os.getenv("NASDAQ_DATA_LINK_API_KEY", "")
 
 # ── Market universe ────────────────────────────────────────────────────────────
 INDICES = ["SPY", "QQQ", "IWM", "DIA"]

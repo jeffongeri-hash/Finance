@@ -11,3 +11,4 @@ pydantic-settings==2.6.1
 aiohttp==3.11.10
 websockets==14.1
 fredapi==0.5.2
+nasdaq-data-link==1.0.4

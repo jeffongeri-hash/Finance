@@ -80,6 +80,24 @@
       Momentum Scanner
     </button>
 
+    <button class="nav-item" data-view="predictions">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="2" y1="12" x2="22" y2="12"/>
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+      </svg>
+      Prediction Markets
+      <span class="sidebar-badge" style="background:var(--purple)">PM</span>
+    </button>
+
+    <button class="nav-item" data-view="trading">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+      </svg>
+      PM Auto-Trade
+      <span class="sidebar-badge" style="background:var(--green);font-size:9px" id="engine-nav-dot"></span>
+    </button>
+
     <div class="nav-section-label">Analysis</div>
 
     <button class="nav-item" data-view="why">
@@ -361,6 +379,226 @@
 
     </section>
 
+    <!-- ── PREDICTION MARKETS VIEW ──────────────────────────────────────────────── -->
+    <section id="view-predictions" class="view">
+
+      <!-- Header row: search + tabs + refresh -->
+      <div class="card" style="padding:12px 16px">
+        <div class="flex items-center justify-between flex-wrap gap-12">
+          <div class="flex gap-8">
+            <button class="period-btn active" data-pm-tab="all">All Markets</button>
+            <button class="period-btn" data-pm-tab="biotech">Biotech / FDA</button>
+            <button class="period-btn" data-pm-tab="macro">Macro</button>
+            <button class="period-btn" data-pm-tab="geopolitical">Geopolitical</button>
+          </div>
+          <div class="flex items-center gap-8">
+            <div style="position:relative">
+              <svg style="position:absolute;left:8px;top:50%;transform:translateY(-50%);width:12px;color:var(--text-muted)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <input id="pm-search-input" type="text" placeholder="Search prediction markets…"
+                style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);
+                       color:var(--text-primary);font-size:12px;outline:none;padding:6px 12px 6px 28px;width:220px"
+                autocomplete="off" spellcheck="false" />
+            </div>
+            <button id="pm-refresh-btn" class="card-action" style="border:1px solid var(--border);padding:4px 10px;border-radius:var(--radius-sm)">Refresh</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Search results (shown when searching) -->
+      <div id="pm-search-results"></div>
+
+      <!-- All tab -->
+      <div data-pm-panel="all">
+        <div class="card" style="padding:8px 16px 0">
+          <div class="flex items-center justify-between" style="margin-bottom:8px">
+            <span class="card-title">Top Markets by Volume</span>
+            <div id="pm-stats-all" class="flex items-center gap-8"></div>
+          </div>
+        </div>
+        <div id="pm-grid-all" class="pm-grid">
+          <div class="loading-text" style="grid-column:1/-1;padding:60px">Click to load Polymarket data…</div>
+        </div>
+      </div>
+
+      <!-- Biotech tab -->
+      <div data-pm-panel="biotech" class="hidden">
+        <div class="card" style="padding:8px 16px 0">
+          <div class="flex items-center justify-between" style="margin-bottom:8px">
+            <span class="card-title">Biotech / FDA Prediction Markets</span>
+            <div id="pm-stats-biotech" class="flex items-center gap-8"></div>
+          </div>
+          <div class="fs-11 text-muted" style="padding-bottom:8px">
+            Crowd-implied probability of FDA approvals, clinical trial outcomes, and drug launches.
+            These <em>directly complement</em> the Catalyst Calendar — compare YES% with analyst consensus.
+          </div>
+        </div>
+        <div id="pm-grid-biotech" class="pm-grid">
+          <div class="loading-text" style="grid-column:1/-1;padding:40px">Loading biotech markets…</div>
+        </div>
+      </div>
+
+      <!-- Macro tab -->
+      <div data-pm-panel="macro" class="hidden">
+        <div class="card" style="padding:8px 16px 0">
+          <div class="flex items-center justify-between" style="margin-bottom:8px">
+            <span class="card-title">Macro Economic Markets</span>
+            <div id="pm-stats-macro" class="flex items-center gap-8"></div>
+          </div>
+          <div class="fs-11 text-muted" style="padding-bottom:8px">
+            Fed rate decisions, CPI outcomes, recession probability, tariff/trade events.
+            Compare these with the "Why Moving?" correlator to see how aligned prediction markets are with equities.
+          </div>
+        </div>
+        <div id="pm-grid-macro" class="pm-grid">
+          <div class="loading-text" style="grid-column:1/-1;padding:40px">Loading macro markets…</div>
+        </div>
+      </div>
+
+      <!-- Geopolitical tab -->
+      <div data-pm-panel="geopolitical" class="hidden">
+        <div class="card" style="padding:8px 16px 0">
+          <div class="flex items-center justify-between" style="margin-bottom:8px">
+            <span class="card-title">Geopolitical Markets</span>
+            <div id="pm-stats-geopolitical" class="flex items-center gap-8"></div>
+          </div>
+        </div>
+        <div id="pm-grid-geopolitical" class="pm-grid">
+          <div class="loading-text" style="grid-column:1/-1;padding:40px">Loading geopolitical markets…</div>
+        </div>
+      </div>
+
+      <!-- Data attribution -->
+      <div class="card" style="background:var(--bg-elevated);padding:10px 16px">
+        <div class="fs-11 text-muted">
+          Data: <strong style="color:var(--text-primary)">Polymarket Gamma API</strong> (gamma-api.polymarket.com) +
+          <strong style="color:var(--text-primary)">CLOB API</strong> (clob.polymarket.com) —
+          No API key required · Prices update every 5 min (cached) · Live prices marked LIVE badge
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ── TRADING ENGINE VIEW ───────────────────────────────────────────────── -->
+    <section id="view-trading" class="view">
+
+      <!-- Engine control row -->
+      <div class="card" style="padding:14px 16px">
+        <div class="flex items-center justify-between flex-wrap gap-12">
+          <div>
+            <div class="card-title" style="margin-bottom:6px">Automated Polymarket Paper Trader</div>
+            <div class="fs-11 text-muted">
+              Signals: Order-Book Imbalance · Macro Arbitrage · Biotech Catalyst · News Lag · Momentum Correlation
+            </div>
+          </div>
+          <div class="flex items-center gap-8">
+            <div id="engine-status-bar" class="flex items-center gap-10" style="font-size:12px">
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--text-muted)"></div>
+              <span style="color:var(--text-muted)">STOPPED</span>
+            </div>
+            <button id="engine-start-btn" class="card-action" style="background:var(--green);color:#000;border:none;padding:6px 16px;border-radius:var(--radius-sm);font-weight:700;cursor:pointer">
+              Start Engine
+            </button>
+            <button id="engine-stop-btn" class="card-action" style="background:var(--red);color:#fff;border:none;padding:6px 16px;border-radius:var(--radius-sm);font-weight:700;cursor:pointer" disabled>
+              Stop Engine
+            </button>
+            <button class="card-action" onclick="window._tradingRefresh && window._tradingRefresh()" style="border:1px solid var(--border);padding:5px 10px;border-radius:var(--radius-sm)">
+              Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- P&L summary stats strip -->
+      <div class="card" style="padding:14px 16px">
+        <div class="card-header" style="margin-bottom:10px">
+          <span class="card-title">Performance Summary</span>
+        </div>
+        <div id="engine-pnl-summary" class="engine-stats-strip">
+          <div class="loading-text">Load engine stats…</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+
+        <!-- Active signals -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Active Signals</span>
+            <span class="fs-11 text-muted">min confidence 55% · updated every 60s</span>
+          </div>
+          <div id="engine-signals">
+            <div class="loading-text" style="padding:30px">Start the engine to see live signals</div>
+          </div>
+        </div>
+
+        <!-- Event log -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Engine Event Log</span>
+            <span class="fs-11 text-muted">last 30 events</span>
+          </div>
+          <div id="engine-log" style="max-height:360px;overflow-y:auto">
+            <div class="loading-text" style="padding:30px">Waiting for engine events…</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Open positions -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Open Positions</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="data-table">
+            <thead>
+              <tr><th>Market ID</th><th>Side</th><th>Shares</th><th>Avg Price</th><th>Cost Basis</th><th>Status</th></tr>
+            </thead>
+            <tbody id="engine-positions-body">
+              <tr><td colspan="6" class="loading-text" style="padding:20px">No open positions</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Trade history -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Trade History (last 50)</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="data-table">
+            <thead>
+              <tr><th>Market</th><th>Question</th><th>Side</th><th>Entry</th><th>Exit</th><th>Net P&amp;L</th><th>P&amp;L %</th><th>Result</th></tr>
+            </thead>
+            <tbody id="engine-trades-body">
+              <tr><td colspan="8" class="loading-text" style="padding:20px">No completed trades yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Risk parameter reference -->
+      <div class="card" style="background:var(--bg-elevated);padding:12px 16px">
+        <div class="card-header" style="margin-bottom:8px">
+          <span class="card-title">Risk Parameters (paper trading defaults)</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;font-size:11px;color:var(--text-secondary)">
+          <div><strong style="color:var(--text-primary)">Starting Balance</strong><br>$10,000 paper USDC</div>
+          <div><strong style="color:var(--text-primary)">Max Position Size</strong><br>5% of balance per trade</div>
+          <div><strong style="color:var(--text-primary)">Hard Cap</strong><br>10% of balance max</div>
+          <div><strong style="color:var(--text-primary)">Stop Loss</strong><br>Auto-close at −15% loss</div>
+          <div><strong style="color:var(--text-primary)">Daily Loss Limit</strong><br>Circuit breaker at −$500/day</div>
+          <div><strong style="color:var(--text-primary)">Min Confidence</strong><br>55% minimum signal confidence</div>
+          <div><strong style="color:var(--text-primary)">Scan Interval</strong><br>Every 60 seconds</div>
+          <div><strong style="color:var(--text-primary)">Settlement Delay</strong><br>6s simulated Polygon blocks</div>
+        </div>
+      </div>
+
+    </section>
+
     <!-- ── WHY MOVING VIEW ────────────────────────────────────────────────────── -->
     <section id="view-why" class="view">
 
@@ -408,7 +646,11 @@ import { loadDashboard, initWebSocket } from "/static/js/dashboard.js";
 import { loadChart, initChartView, openChart } from "/static/js/charts.js";
 import { loadCatalysts, initCatalystView } from "/static/js/catalyst.js";
 import { loadMomentumScan, loadSqueezeScan, initMomentumView } from "/static/js/momentum.js";
+import { loadPredictions, initPredictionsView } from "/static/js/predictions.js";
+import { loadTrading, initTradingView, refreshStats as tradingRefreshStats } from "/static/js/trading.js";
 import { API, Fmt, changeClass, sentimentBadge } from "/static/js/api.js";
+
+window._tradingRefresh = tradingRefreshStats;
 
 // ── Global openChart (called from tables/cards) ───────────────────────────────
 window.openChart = openChart;
@@ -427,10 +669,12 @@ function switchView(viewId) {
   loaded.add(viewId);
 
   switch (viewId) {
-    case "catalyst": loadCatalysts(); break;
-    case "momentum": /* wait for user to click Scan Now */ break;
-    case "why":      loadWhyView(); break;
-    case "chart":    initChartView(); break;
+    case "catalyst":    loadCatalysts(); break;
+    case "momentum":    /* wait for user to click Scan Now */ break;
+    case "why":         loadWhyView(); break;
+    case "chart":       initChartView(); break;
+    case "predictions": loadPredictions(); break;
+    case "trading":     loadTrading(); break;
   }
 }
 
@@ -547,6 +791,8 @@ window.refreshCorrelation = async () => {
   initCatalystView();
   initMomentumView();
   initChartView();
+  initPredictionsView();
+  initTradingView();
 
   // Load dashboard immediately
   loaded.add("dashboard");

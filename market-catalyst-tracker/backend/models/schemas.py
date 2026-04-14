@@ -90,3 +90,51 @@ class ScanResult(BaseModel):
     candidates: List[MomentumCandidate]
     scanned: int
     timestamp: int
+
+
+class PredictionMarket(BaseModel):
+    """A single Polymarket binary market."""
+    condition_id: str
+    slug: str = ""
+    question: str
+    description: str = ""
+    outcomes: List[str] = Field(default_factory=lambda: ["Yes", "No"])
+    yes_price: Optional[float] = None   # 0.0–1.0 — the crowd-implied probability
+    no_price:  Optional[float] = None
+    yes_token_id: Optional[str] = None
+    volume: float = 0.0                 # total $ traded
+    liquidity: float = 0.0             # current $ in order book
+    active: bool = True
+    closed: bool = False
+    end_date: str = ""
+    tags: List[str] = Field(default_factory=list)
+    url: str = ""
+    category: str = "other"            # biotech_fda | macro | geopolitical | crypto | other
+    price_source: str = "gamma_cached" # gamma_cached | clob_live
+
+
+class EnrichedCatalyst(BaseModel):
+    """CatalystEvent extended with an optional matched Polymarket market."""
+    symbol: str
+    company: str
+    event_type: str
+    event_date: Optional[str] = None
+    days_until: Optional[int] = None
+    description: str
+    priority: str = "MEDIUM"
+    market_cap: Optional[float] = None
+    price: Optional[float] = None
+    price_change_pct: Optional[float] = None
+    short_interest_pct: Optional[float] = None
+    source_url: str = ""
+    # Polymarket attachment — None if no matching market found
+    prediction_market: Optional[PredictionMarket] = None
+
+
+class PredictionSnapshot(BaseModel):
+    """Full snapshot of prediction market data by category."""
+    top: List[PredictionMarket]
+    biotech_fda: List[PredictionMarket]
+    macro: List[PredictionMarket]
+    geopolitical: List[PredictionMarket]
+    timestamp: int

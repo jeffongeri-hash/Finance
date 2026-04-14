@@ -22,6 +22,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import INDICES, SECTORS, MOMENTUM_UNIVERSE, BIOTECH_TICKERS
+from data.nasdaq_adapter import (
+    get_short_interest, get_macro_snapshot as nasdaq_macro_snapshot,
+    get_ohlcv_history as nasdaq_ohlcv, get_status as nasdaq_status,
+)
 from data.yfinance_adapter import (
     get_quote, get_quotes_bulk, get_history, get_news, get_market_news,
 )
@@ -30,9 +34,27 @@ from data.fred_adapter import get_latest_macro_indicators, get_yield_curve_sprea
 from analysis.news_correlator import correlate_market_news, correlate_symbol_news
 from analysis.catalyst_scanner import scan_catalysts
 from analysis.momentum_scanner import run_momentum_scan, run_squeeze_scan
+from trading.engine import create_engine, get_engine
+from trading.signals import run_signal_scan
+from analysis.prediction_scanner import (
+    pull_all_prediction_data,
+    get_biotech_fda_markets,
+    get_macro_markets,
+    get_geopolitical_markets,
+    get_top_markets_all,
+    enrich_catalysts_with_predictions,
+    get_market_chart_data,
+)
+from data.polymarket_adapter import (
+    search_markets as pm_search,
+    get_order_book as pm_order_book,
+    get_live_midpoint,
+    enrich_with_live_price,
+)
 from models.schemas import (
     StockQuote, Candle, NewsItem, MarketOverview,
     NewsCorrelation, CatalystEvent, MomentumCandidate, ScanResult,
+    PredictionMarket, EnrichedCatalyst, PredictionSnapshot,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s │ %(name)s │ %(message)s")
@@ -330,6 +352,105 @@ async def search_symbol(q: str = Query(..., min_length=1, max_length=10)):
     return quote
 
 
+# ── Prediction Markets (Polymarket) ──────────────────────────────────────────
+
+@app.get("/api/predictions/top")
+async def prediction_top(limit: int = Query(50, ge=1, le=100)):
+    """
+    Top Polymarket markets by volume — broad view across all categories.
+    Includes category label (biotech_fda | macro | geopolitical | crypto | other).
+    Cached 5 minutes.
+    """
+    markets = await _acached("pred_top", _SCAN_TTL, get_top_markets_all(limit))
+    return {"markets": markets, "count": len(markets), "timestamp": int(time.time())}
+
+
+@app.get("/api/predictions/biotech")
+async def prediction_biotech(limit: int = Query(30, ge=1, le=100)):
+    """
+    Polymarket markets about FDA drug approvals, clinical trials, biotech.
+    These are the crowd-wisdom counterpart to the catalyst calendar —
+    e.g. 'Will Moderna's drug get FDA approval by Q2?' → yes_price = 0.71.
+    Cached 5 minutes.
+    """
+    markets = await _acached("pred_bio", _SCAN_TTL, get_biotech_fda_markets(limit))
+    return {"markets": markets, "count": len(markets), "timestamp": int(time.time())}
+
+
+@app.get("/api/predictions/macro")
+async def prediction_macro(limit: int = Query(30, ge=1, le=100)):
+    """
+    Polymarket macro-economic markets:
+    Fed rate decisions, CPI outcomes, recession probability, tariffs.
+    Useful alongside the 'Why is the market moving?' correlator.
+    Cached 5 minutes.
+    """
+    markets = await _acached("pred_macro", _SCAN_TTL, get_macro_markets(limit))
+    return {"markets": markets, "count": len(markets), "timestamp": int(time.time())}
+
+
+@app.get("/api/predictions/geopolitical")
+async def prediction_geopolitical(limit: int = Query(20, ge=1, le=50)):
+    """Polymarket geopolitical / political event markets."""
+    markets = await _acached("pred_geo", _SCAN_TTL, get_geopolitical_markets(limit))
+    return {"markets": markets, "count": len(markets), "timestamp": int(time.time())}
+
+
+@app.get("/api/predictions/search")
+async def prediction_search(q: str = Query(..., min_length=2, max_length=100)):
+    """Full-text search across Polymarket markets."""
+    results = await pm_search(q.strip(), limit=15)
+    # Enrich top-3 with live CLOB prices
+    for m in results[:3]:
+        await enrich_with_live_price(m)
+    return {"query": q, "results": results, "count": len(results)}
+
+
+@app.get("/api/predictions/snapshot")
+async def prediction_snapshot():
+    """
+    Full snapshot: top + biotech + macro + geopolitical in one call.
+    Useful for initial page load. Cached 5 minutes.
+    """
+    data = await _acached("pred_snapshot", _SCAN_TTL, pull_all_prediction_data())
+    return data
+
+
+@app.get("/api/predictions/market/{condition_id}/book")
+async def prediction_order_book(condition_id: str):
+    """Live order book depth for a specific Polymarket YES token."""
+    book = await pm_order_book(condition_id)
+    return book
+
+
+@app.get("/api/predictions/market/{token_id}/history")
+async def prediction_price_history(token_id: str):
+    """Historical probability series for charting a Polymarket market."""
+    history = await get_market_chart_data(token_id)
+    return {"token_id": token_id, "history": history}
+
+
+@app.get("/api/catalysts/biotech/enriched")
+async def biotech_catalysts_enriched(
+    priority: Optional[str] = Query(None, regex="^(HIGH|MEDIUM|LOW)$"),
+    limit: int = Query(20, ge=1, le=50),
+):
+    """
+    Catalyst calendar with Polymarket prediction market odds attached.
+    Each event includes prediction_market: {yes_price, volume, question, url} if found.
+    Heavy endpoint — catalyst scan + N Polymarket searches. Cached 5 minutes.
+    """
+    raw_events = await _acached("catalysts", _SCAN_TTL, scan_catalysts())
+    if priority:
+        raw_events = [e for e in raw_events if e.priority == priority]
+    enriched = await _acached(
+        f"enriched_catalysts_{priority}_{limit}",
+        _SCAN_TTL,
+        enrich_catalysts_with_predictions(raw_events[:limit]),
+    )
+    return {"events": enriched, "count": len(enriched), "timestamp": int(time.time())}
+
+
 # ── Macro indicators (FRED — optional) ───────────────────────────────────────
 
 @app.get("/api/macro/indicators")
@@ -400,6 +521,133 @@ async def startup():
     asyncio.create_task(
         _stream.start_ticker(INDICES + SECTORS[:5], interval=20.0)
     )
+    # Create paper trading engine (auto-starts signal scanning on first /api/trading/start)
+    create_engine(initial_balance=10_000.0)
+
+
+# ── Trading Engine Routes ─────────────────────────────────────────────────────
+
+@app.post("/api/trading/start")
+async def trading_start(balance: float = 10_000.0):
+    """
+    Start the automated paper trading engine.
+    Begins scanning for signals every 60 seconds and auto-executes trades.
+    All trades are paper (simulated) by default.
+    """
+    engine = get_engine() or create_engine(initial_balance=balance)
+    if not engine._running:
+        await engine.start()
+    return {"status": "running", "balance": engine.trader.balance, "mode": "paper"}
+
+
+@app.post("/api/trading/stop")
+async def trading_stop():
+    """Stop the trading engine."""
+    engine = get_engine()
+    if engine and engine._running:
+        await engine.stop()
+    return {"status": "stopped"}
+
+
+@app.get("/api/trading/stats")
+async def trading_stats():
+    """Real-time P&L, win rate, open positions, trade log, and current signals."""
+    engine = get_engine()
+    if not engine:
+        return {"error": "Engine not initialised. POST /api/trading/start first."}
+    return engine.get_stats()
+
+
+@app.get("/api/trading/signals")
+async def trading_signals():
+    """
+    Run the full signal scan on demand and return current opportunities.
+    Covers: order-book imbalance, macro arbitrage, biotech catalyst edge,
+            news lag, momentum correlation.
+    """
+    from analysis.prediction_scanner import get_biotech_fda_markets, get_macro_markets
+    from analysis.news_correlator import correlate_market_news
+    from analysis.momentum_scanner import run_momentum_scan
+
+    biotech  = await get_biotech_fda_markets(20)
+    macro    = await get_macro_markets(20)
+    corr     = await asyncio.get_event_loop().run_in_executor(
+        _executor, lambda: correlate_market_news("SPY")
+    )
+    news     = [n.model_dump() for n in corr.supporting_news[:10]]
+    momentum = await run_momentum_scan(top_n=20, min_score=35)
+    cands    = [c.model_dump() for c in momentum.candidates]
+
+    signals = await run_signal_scan(
+        biotech_markets     = biotech,
+        macro_markets       = macro,
+        news_items          = news,
+        momentum_candidates = cands,
+    )
+    return {"signals": signals, "count": len(signals), "timestamp": int(time.time())}
+
+
+@app.get("/api/trading/log")
+async def trading_log():
+    """Engine event log (last 50 entries)."""
+    engine = get_engine()
+    if not engine:
+        return {"log": []}
+    return {"log": engine.get_log()[-50:], "timestamp": int(time.time())}
+
+
+# ── Nasdaq Data Link ──────────────────────────────────────────────────────────
+
+@app.get("/api/nasdaq/status")
+async def nasdaq_adapter_status():
+    """Check whether Nasdaq Data Link API key is configured."""
+    return nasdaq_status()
+
+
+@app.get("/api/nasdaq/short-interest/{ticker}")
+async def nasdaq_short_interest(ticker: str):
+    """
+    Official FINRA bi-weekly short interest for a ticker.
+    Requires NASDAQ_DATA_LINK_API_KEY in .env.
+    """
+    data = await get_short_interest(ticker.upper())
+    if not data:
+        return {"ticker": ticker.upper(), "available": False,
+                "note": "Set NASDAQ_DATA_LINK_API_KEY to enable FINRA data"}
+    return {"ticker": ticker.upper(), "available": True, **data}
+
+
+@app.get("/api/nasdaq/macro")
+async def nasdaq_macro():
+    """
+    Latest macro indicators via Nasdaq Data Link / FRED.
+    Requires NASDAQ_DATA_LINK_API_KEY in .env.
+    """
+    snapshot = await nasdaq_macro_snapshot()
+    available = any(v is not None for v in snapshot.values())
+    return {
+        "available": available,
+        "indicators": snapshot,
+        "note": None if available else "Set NASDAQ_DATA_LINK_API_KEY to enable FRED macro data",
+        "timestamp": int(time.time()),
+    }
+
+
+@app.get("/api/nasdaq/history/{ticker}")
+async def nasdaq_history(
+    ticker: str,
+    start: str = Query("2024-01-01", description="YYYY-MM-DD"),
+    source: str = Query("WIKI", description="WIKI or EOD"),
+):
+    """
+    Historical OHLCV from Nasdaq Data Link.
+    WIKI is free; EOD requires subscription.
+    """
+    data = await nasdaq_ohlcv(ticker.upper(), start_date=start, source=source)
+    if not data:
+        return {"ticker": ticker.upper(), "available": False,
+                "note": "Set NASDAQ_DATA_LINK_API_KEY or try source=WIKI"}
+    return {"ticker": ticker.upper(), "source": source, "bars": data, "count": len(data)}
 
 
 @app.websocket("/ws/prices")
