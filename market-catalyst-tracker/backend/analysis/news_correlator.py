@@ -32,6 +32,18 @@ from data.yfinance_adapter import get_market_news, get_news, get_quote
 from data.finnhub_adapter import get_market_news as finnhub_market_news
 from models.schemas import NewsCorrelation, NewsItem
 
+# Adanos sentiment is optional — imported lazily so missing key doesn't break module
+def _get_adanos_sentiment(ticker: str) -> Optional[Dict]:
+    """Fetch Adanos composite sentiment. Returns None if key absent or error."""
+    try:
+        from config import ADANOS_API_KEY
+        if not ADANOS_API_KEY:
+            return None
+        from data.adanos_adapter import get_sentiment_snapshot
+        return get_sentiment_snapshot(ticker, days=3)
+    except Exception:
+        return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -255,6 +267,7 @@ def correlate_market_news(market_symbol: str = "SPY") -> NewsCorrelation:
 def correlate_symbol_news(symbol: str) -> Dict:
     """
     For a specific stock: explain why it's moving today.
+    Enriched with Adanos cross-source social sentiment when key is available.
     Returns correlation dict similar to market-wide but symbol-focused.
     """
     quote = get_quote(symbol) or {}
@@ -273,13 +286,34 @@ def correlate_symbol_news(symbol: str) -> Dict:
     enriched.sort(key=lambda x: -x.timestamp)
     summary = _build_summary(primary, change_pct, enriched[:2])
 
+    # Adanos social sentiment (optional enrichment)
+    social = _get_adanos_sentiment(symbol)
+    social_composite: Optional[Dict] = None
+    if social:
+        comp = social.get("composite", {})
+        sentiment_label = comp.get("sentiment", "neutral")
+        bull_pct = comp.get("bullish_pct")
+        buzz = comp.get("buzz_score")
+        social_composite = comp
+
+        # Append social context to summary if signal is meaningful
+        if bull_pct is not None and comp.get("sentiment") in ("bullish", "bearish"):
+            direction_word = "bullish" if sentiment_label == "bullish" else "bearish"
+            summary += (
+                f" Social sentiment is {direction_word} "
+                f"({bull_pct*100:.0f}% bullish"
+                + (f", buzz {buzz:.0f}/100" if buzz else "")
+                + ")."
+            )
+
     return {
-        "symbol": symbol,
-        "change_pct": round(change_pct, 3),
-        "primary_driver": primary,
-        "driver_label": DRIVER_LABELS.get(primary, primary),
-        "confidence": confidence,
-        "summary": summary,
-        "news": [n.model_dump() for n in enriched[:10]],
-        "timestamp": int(time.time()),
+        "symbol":          symbol,
+        "change_pct":      round(change_pct, 3),
+        "primary_driver":  primary,
+        "driver_label":    DRIVER_LABELS.get(primary, primary),
+        "confidence":      confidence,
+        "summary":         summary,
+        "news":            [n.model_dump() for n in enriched[:10]],
+        "social_sentiment": social_composite,
+        "timestamp":       int(time.time()),
     }

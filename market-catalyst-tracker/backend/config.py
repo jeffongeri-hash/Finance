@@ -13,6 +13,17 @@ FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
 # Nasdaq Data Link (formerly Quandl) — enables FINRA short interest, EOD history, FRED macro
 NASDAQ_DATA_LINK_API_KEY: str = os.getenv("NASDAQ_DATA_LINK_API_KEY", "")
 
+# ── finance-skills data providers ─────────────────────────────────────────────
+# Funda AI — 60+ endpoints: quotes, fundamentals, options flow/GEX, SEC filings,
+# earnings transcripts, supply chain, congressional trades, macro/FRED.
+# https://funda.ai  (Bearer token)
+FUNDA_API_KEY: str = os.getenv("FUNDA_API_KEY", "")
+
+# Adanos Finance — multi-source sentiment: Reddit, X.com, news, Polymarket.
+# Returns buzz_score, mentions, bullish_pct, bearish_pct, trend, sentiment_score.
+# https://api.adanos.org  (X-API-Key header)
+ADANOS_API_KEY: str = os.getenv("ADANOS_API_KEY", "")
+
 # ── Polymarket CLOB live trading ───────────────────────────────────────────────
 # Required for live order execution (live_mode=True in TradingEngine).
 # Without these the engine runs in paper mode silently.

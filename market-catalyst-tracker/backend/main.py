@@ -1246,6 +1246,219 @@ async def equity_analyze_single(
     return result
 
 
+# ── Finance-Skills Equity Research Routes ────────────────────────────────────
+# Powered by Funda AI (fundamentals, earnings, filings) and
+# Adanos Finance (social sentiment across Reddit, X, news, Polymarket).
+# All routes degrade gracefully — returns partial data when API keys are absent.
+
+@app.get("/api/research/snapshot/{ticker}")
+async def research_snapshot(ticker: str):
+    """
+    One-shot equity research snapshot: fundamentals + analyst targets +
+    earnings history + social sentiment.
+    Requires FUNDA_API_KEY and/or ADANOS_API_KEY for full data.
+    Falls back to yfinance data when keys are absent.
+    """
+    from data.funda_adapter import get_equity_snapshot
+    from data.adanos_adapter import get_sentiment_snapshot
+    from data.yfinance_adapter import get_quote
+
+    sym = ticker.upper().strip()
+
+    loop = asyncio.get_event_loop()
+    funda_task    = loop.run_in_executor(_executor, get_equity_snapshot, sym)
+    adanos_task   = loop.run_in_executor(_executor, get_sentiment_snapshot, sym)
+    yf_task       = loop.run_in_executor(_executor, get_quote, sym)
+
+    funda_data, adanos_data, yf_quote = await asyncio.gather(
+        funda_task, adanos_task, yf_task, return_exceptions=True
+    )
+
+    if isinstance(funda_data, Exception):
+        funda_data = {}
+    if isinstance(adanos_data, Exception):
+        adanos_data = {}
+    if isinstance(yf_quote, Exception):
+        yf_quote = {}
+
+    return {
+        "ticker":         sym,
+        "quote":          yf_quote or {},
+        "fundamentals":   funda_data,
+        "sentiment":      adanos_data,
+        "timestamp":      int(__import__("time").time()),
+    }
+
+
+@app.get("/api/research/sentiment/{ticker}")
+async def research_sentiment(
+    ticker: str,
+    days:   int = Query(7, ge=1, le=30, description="Lookback window in days"),
+):
+    """
+    Cross-source social sentiment for a ticker.
+    Sources: Reddit, X.com, News, Polymarket.
+    Requires ADANOS_API_KEY.
+    """
+    from data.adanos_adapter import get_sentiment_snapshot
+    sym = ticker.upper().strip()
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(_executor, get_sentiment_snapshot, sym, days)
+    return result
+
+
+@app.get("/api/research/earnings-calendar")
+async def research_earnings_calendar(
+    date_after:  Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_before: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    ticker:      Optional[str] = Query(None, description="Filter by ticker"),
+    limit:       int           = Query(50, ge=1, le=200),
+):
+    """
+    Upcoming earnings announcements.
+    Requires FUNDA_API_KEY for full data; returns empty list otherwise.
+    """
+    from data.funda_adapter import get_earnings_calendar
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(
+        _executor, get_earnings_calendar, date_after, date_before, ticker, limit
+    )
+    return {"earnings": data, "count": len(data)}
+
+
+@app.get("/api/research/economic-calendar")
+async def research_economic_calendar(
+    date_after:  Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_before: Optional[str] = Query(None, description="YYYY-MM-DD"),
+):
+    """
+    Upcoming macro events: Fed decisions, CPI, GDP, NFP.
+    Requires FUNDA_API_KEY.
+    """
+    from data.funda_adapter import get_economic_calendar
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(_executor, get_economic_calendar, date_after, date_before)
+    return {"events": data, "count": len(data)}
+
+
+@app.get("/api/research/fundamentals/{ticker}")
+async def research_fundamentals(
+    ticker: str,
+    period: str = Query("annual", description="annual or quarter"),
+):
+    """
+    Key metrics TTM + income statement + analyst estimates for a ticker.
+    Requires FUNDA_API_KEY.
+    """
+    from data.funda_adapter import get_key_metrics_ttm, get_income_statement, get_analyst_estimates, get_price_targets
+    sym = ticker.upper().strip()
+    loop = asyncio.get_event_loop()
+
+    metrics_t  = loop.run_in_executor(_executor, get_key_metrics_ttm, sym)
+    income_t   = loop.run_in_executor(_executor, get_income_statement, sym, period, 4)
+    estimates_t = loop.run_in_executor(_executor, get_analyst_estimates, sym)
+    targets_t  = loop.run_in_executor(_executor, get_price_targets, sym)
+
+    metrics, income, estimates, targets = await asyncio.gather(
+        metrics_t, income_t, estimates_t, targets_t, return_exceptions=True
+    )
+
+    return {
+        "ticker":            sym,
+        "key_metrics_ttm":   metrics if not isinstance(metrics, Exception) else None,
+        "income_statement":  income  if not isinstance(income, Exception) else [],
+        "analyst_estimates": estimates if not isinstance(estimates, Exception) else None,
+        "price_targets":     targets if not isinstance(targets, Exception) else None,
+    }
+
+
+@app.get("/api/research/catalyst-insight/{ticker}")
+async def research_catalyst_insight(ticker: str):
+    """
+    Why is this stock moving? Combines:
+      • Recent news sentiment (yfinance + Finnhub)
+      • Social buzz from Adanos (Reddit, X, news, Polymarket)
+      • Upcoming earnings date (Funda AI)
+      • Recent SEC 8-K filings (Funda AI)
+    Returns a structured explanation of the primary catalyst.
+    """
+    from analysis.news_correlator import correlate_symbol_news
+    from data.adanos_adapter import get_sentiment_snapshot
+    from data.funda_adapter import get_earnings_calendar, get_sec_filings
+    import time as _time
+
+    sym = ticker.upper().strip()
+    loop = asyncio.get_event_loop()
+
+    # Run all concurrently
+    news_t    = loop.run_in_executor(_executor, correlate_symbol_news, sym)
+    sent_t    = loop.run_in_executor(_executor, get_sentiment_snapshot, sym, 7)
+    earn_t    = loop.run_in_executor(_executor, get_earnings_calendar, None, None, sym, 3)
+    filings_t = loop.run_in_executor(_executor, get_sec_filings, sym, "8-K", 5)
+
+    news_data, sentiment, earnings, filings = await asyncio.gather(
+        news_t, sent_t, earn_t, filings_t, return_exceptions=True
+    )
+
+    if isinstance(news_data, Exception):
+        news_data = {}
+    if isinstance(sentiment, Exception):
+        sentiment = {}
+    if isinstance(earnings, Exception):
+        earnings = []
+    if isinstance(filings, Exception):
+        filings = []
+
+    # Build catalyst explanation
+    explanation_parts = []
+    change_pct = news_data.get("change_pct", 0)
+
+    # 1. Primary market driver from news
+    driver_label = news_data.get("driver_label", "")
+    if driver_label:
+        direction = "up" if change_pct > 0 else "down"
+        explanation_parts.append(
+            f"{sym} is {direction} {abs(change_pct):.2f}% — primary driver: {driver_label}."
+        )
+
+    # 2. Social sentiment signal
+    comp = (sentiment or {}).get("composite", {})
+    if comp.get("sentiment") and comp["sentiment"] != "neutral":
+        bull_pct = comp.get("bullish_pct") or 0
+        explanation_parts.append(
+            f"Social sentiment is {comp['sentiment']} ({bull_pct*100:.0f}% bullish across platforms)."
+        )
+        if comp.get("sources_agree"):
+            explanation_parts.append("All tracked sources are aligned.")
+
+    # 3. Upcoming earnings catalyst
+    if earnings:
+        next_earn = earnings[0]
+        explanation_parts.append(
+            f"Next earnings: {next_earn.get('date', 'TBD')} "
+            f"({'before open' if next_earn.get('time') == 'bmo' else 'after close'})."
+        )
+
+    # 4. Recent 8-K filings
+    if filings:
+        explanation_parts.append(
+            f"{len(filings)} recent 8-K filing(s) — latest: {filings[0].get('date', 'unknown date')}."
+        )
+
+    return {
+        "ticker":           sym,
+        "change_pct":       round(change_pct, 3),
+        "explanation":      " ".join(explanation_parts) or f"No strong catalyst identified for {sym} today.",
+        "primary_driver":   news_data.get("primary_driver"),
+        "driver_label":     news_data.get("driver_label"),
+        "social_sentiment": comp,
+        "upcoming_earnings": earnings[:1] if earnings else [],
+        "recent_filings":   filings[:3],
+        "news":             news_data.get("news", [])[:5],
+        "timestamp":        int(_time.time()),
+    }
+
+
 # ── Settings Routes ───────────────────────────────────────────────────────────
 
 # All keys managed through the Settings UI, grouped by subsystem.
@@ -1349,6 +1562,21 @@ _KEY_DEFS = {
         "placeholder": "OpenAI  (OpenAI / Anthropic / Groq / DeepSeek)",
         "docs_url":    "",
     },
+    # ── Finance-Skills Data Providers ────────────────────────────────────────
+    "FUNDA_API_KEY": {
+        "group":       "Research Data Providers",
+        "label":       "Funda AI API Key",
+        "sensitive":   True,
+        "placeholder": "Earnings calendar, fundamentals, options flow, SEC filings, supply chain",
+        "docs_url":    "https://funda.ai",
+    },
+    "ADANOS_API_KEY": {
+        "group":       "Research Data Providers",
+        "label":       "Adanos Finance API Key",
+        "sensitive":   True,
+        "placeholder": "Reddit / X.com / news / Polymarket sentiment per ticker",
+        "docs_url":    "https://api.adanos.org/docs",
+    },
 }
 
 
@@ -1420,6 +1648,8 @@ def _reload_config() -> None:
         "DEEPSEEK_API_KEY":           getattr(cfg, "DEEPSEEK_API_KEY", ""),
         "EQUITY_MODEL_NAME":          getattr(cfg, "EQUITY_MODEL_NAME", ""),
         "EQUITY_MODEL_PROVIDER":      getattr(cfg, "EQUITY_MODEL_PROVIDER", ""),
+        "FUNDA_API_KEY":              getattr(cfg, "FUNDA_API_KEY", ""),
+        "ADANOS_API_KEY":             getattr(cfg, "ADANOS_API_KEY", ""),
     }
     for k, v in mapping.items():
         if v:
