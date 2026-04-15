@@ -111,9 +111,13 @@ def _parse_market(raw: Dict) -> Optional[Dict]:
         elif isinstance(t, str):
             tag_slugs.append(t)
 
+    slug = (raw.get("slug") or "").strip()
+    if not slug:
+        return None  # skip markets with no valid slug
+
     return {
         "condition_id": cid,
-        "slug":         raw.get("slug", ""),
+        "slug":         slug,
         "question":     raw.get("question", ""),
         "description":  (raw.get("description") or "")[:300],
         "outcomes":     out_raw,
@@ -126,7 +130,7 @@ def _parse_market(raw: Dict) -> Optional[Dict]:
         "closed":       bool(raw.get("closed", False)),
         "end_date":     raw.get("endDateIso") or raw.get("end_date_iso") or raw.get("endDate") or "",
         "tags":         tag_slugs,
-        "url":          f"https://polymarket.com/event/{raw.get('slug','')}" if raw.get("slug") else "",
+        "url":          f"https://polymarket.com/event/{slug}",
     }
 
 

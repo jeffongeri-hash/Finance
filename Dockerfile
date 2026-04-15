@@ -26,7 +26,10 @@ RUN pip install --no-cache-dir \
     finnhub-python==2.4.20 \
     colorama==0.4.6 \
     tabulate==0.9.0 \
-    python-dateutil
+    python-dateutil \
+    rich \
+    questionary \
+    matplotlib
 
 # yfinance pinned — install core first then yfinance without overriding deps
 RUN pip install --no-cache-dir requests lxml beautifulsoup4 html5lib multitasking && \

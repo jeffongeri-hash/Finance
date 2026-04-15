@@ -34,7 +34,7 @@ import pandas as pd
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
-_executor = ThreadPoolExecutor(max_workers=6)
+_executor = ThreadPoolExecutor(max_workers=3)
 
 # ── Timeframe specs ────────────────────────────────────────────────────────────
 
@@ -60,7 +60,7 @@ def _fetch_ohlcv(ticker: str, period: str, interval: str) -> Optional[pd.DataFra
     try:
         df = yf.download(
             ticker, period=period, interval=interval,
-            auto_adjust=True, progress=False,
+            auto_adjust=True, progress=False, timeout=15,
         )
         if df is None or df.empty or len(df) < 5:
             return None

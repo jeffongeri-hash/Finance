@@ -135,7 +135,7 @@ def get_history(
     """OHLCV candles formatted for TradingView lightweight-charts."""
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period=period, interval=interval, auto_adjust=True)
+        hist = t.history(period=period, interval=interval, auto_adjust=True, timeout=15)
         if hist.empty:
             return []
         candles = []
@@ -207,7 +207,7 @@ def get_momentum_data(symbol: str) -> Optional[Dict]:
     """
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="12d", interval="1d", auto_adjust=True)
+        hist = t.history(period="5d", interval="1d", auto_adjust=True, timeout=15)
         if len(hist) < 3:
             return None
 

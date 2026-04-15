@@ -240,7 +240,7 @@ async def get_chart_data(
         _executor, lambda: get_history(symbol.upper(), period, interval)
     )
     if not candles:
-        raise HTTPException(404, f"No data found for {symbol}")
+        return {"symbol": symbol.upper(), "period": period, "interval": interval, "candles": [], "warning": "No data available — market may be closed or symbol invalid"}
     return {"symbol": symbol.upper(), "period": period, "interval": interval, "candles": candles}
 
 
@@ -1454,10 +1454,18 @@ async def get_settings():
             "is_set":        is_set,
             "display_value": display_value,
         }
+    # Detect Railway cloud environment — .env writes won't persist across restarts
+    on_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_SERVICE_NAME"))
+
     return {
-        "keys":      result,
-        "env_file":  str(_ENV_FILE),
-        "timestamp": int(time.time()),
+        "keys":        result,
+        "env_file":    str(_ENV_FILE),
+        "on_railway":  on_railway,
+        "railway_note": (
+            "Running on Railway: keys saved here persist until the next redeploy. "
+            "For permanent storage add them in Railway Dashboard → Variables."
+        ) if on_railway else None,
+        "timestamp":   int(time.time()),
     }
 
 

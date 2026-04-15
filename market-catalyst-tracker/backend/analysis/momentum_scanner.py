@@ -30,7 +30,7 @@ from models.schemas import MomentumCandidate, ScanResult
 
 logger = logging.getLogger(__name__)
 
-_THREAD_WORKERS = 12   # parallelism cap (yfinance is I/O bound)
+_THREAD_WORKERS = 4    # reduced for cloud deployment (512MB RAM limit)
 
 
 # ── Scoring ────────────────────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ async def run_momentum_scan(
     # Run in thread pool (yfinance is sync)
     with ThreadPoolExecutor(max_workers=_THREAD_WORKERS) as pool:
         futures = {pool.submit(_fetch_one, sym): sym for sym in tickers}
-        completed_futures = as_completed(futures, timeout=120)
+        completed_futures = as_completed(futures, timeout=60)
         for fut in completed_futures:
             result = fut.result()
             if result:
@@ -181,7 +181,7 @@ async def run_squeeze_scan(top_n: int = 20) -> ScanResult:
 
     with ThreadPoolExecutor(max_workers=_THREAD_WORKERS) as pool:
         futures = {pool.submit(_fetch_one, sym): sym for sym in tickers}
-        for fut in as_completed(futures, timeout=120):
+        for fut in as_completed(futures, timeout=60):
             result = fut.result()
             if result and (result.get("short_interest_pct") or 0) >= 15:
                 raw_results.append(result)

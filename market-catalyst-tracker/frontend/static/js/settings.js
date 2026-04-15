@@ -219,5 +219,20 @@ export async function loadSettings() {
   if (settingsRes.data) {
     renderKeyForms(settingsRes.data.keys);
     renderEnvPath(settingsRes.data.env_file);
+    _renderRailwayNote(settingsRes.data);
   }
+}
+
+function _renderRailwayNote(data) {
+  const existing = document.getElementById("st-railway-note");
+  if (existing) existing.remove();
+  if (!data.on_railway) return;
+
+  const note = document.createElement("div");
+  note.id = "st-railway-note";
+  note.style.cssText = "margin-bottom:12px;padding:10px 14px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:8px;font-size:12px;color:var(--text-secondary);line-height:1.6";
+  note.innerHTML = `<strong style="color:#818cf8">Railway detected</strong> — ${data.railway_note}`;
+
+  const forms = document.getElementById("st-key-forms");
+  if (forms) forms.parentNode.insertBefore(note, forms);
 }
