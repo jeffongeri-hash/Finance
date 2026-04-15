@@ -97,14 +97,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_executor = ThreadPoolExecutor(max_workers=16)
+_executor = ThreadPoolExecutor(max_workers=4)   # reduced for 512MB Railway container
 
 # ── Simple TTL cache (avoids hammering APIs repeatedly) ───────────────────────
 
 _cache: Dict[str, tuple] = {}   # key → (data, expires_at)
-_SCAN_TTL = 300   # 5 min for heavy scans
-_QUOTE_TTL = 30   # 30 sec for quotes
-_NEWS_TTL = 120   # 2 min for news
+_SCAN_TTL = 600   # 10 min for heavy scans
+_QUOTE_TTL = 120  # 2 min for quotes (yfinance is the bottleneck on Railway)
+_NEWS_TTL = 300   # 5 min for news
 
 
 def _cached(key: str, ttl: int, fn, *args, **kwargs):

@@ -138,9 +138,13 @@ class PaperTrader:
             logger.warning("Insufficient balance: need $%.2f have $%.2f", dollar_amount, self.state.balance)
             return None
 
-        # Fetch live order book
+        # Fetch live order book (with timeout so paper trader never hangs)
         tok = market.yes_token_id if side == OrderSide.YES else market.no_token_id
-        book = await get_order_book(tok)
+        try:
+            book = await asyncio.wait_for(get_order_book(tok), timeout=8.0)
+        except asyncio.TimeoutError:
+            logger.warning("Order book fetch timed out for %s — using midpoint estimate", tok[:12])
+            book = None
 
         shares = dollar_amount / max_price  # shares to buy
         filled, avg_price, slippage = _walk_book(side, max_price, shares, book)

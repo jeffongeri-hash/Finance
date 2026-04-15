@@ -132,7 +132,8 @@ async def run_momentum_scan(
     Full momentum scan.
     Returns top_n candidates sorted by score (descending).
     """
-    tickers = universe or MOMENTUM_UNIVERSE
+    # Cap at 40 tickers by default — enough signal, won't OOM on cloud (512MB RAM)
+    tickers = universe or MOMENTUM_UNIVERSE[:40]
     logger.info("Momentum scan starting: %d tickers", len(tickers))
 
     loop = asyncio.get_event_loop()
@@ -175,7 +176,7 @@ async def run_squeeze_scan(top_n: int = 20) -> ScanResult:
     Focused short-squeeze scan:
     Filters for symbols with short interest > 15% and positive momentum.
     """
-    tickers = MOMENTUM_UNIVERSE
+    tickers = MOMENTUM_UNIVERSE[:40]
     loop = asyncio.get_event_loop()
     raw_results: List[Dict] = []
 

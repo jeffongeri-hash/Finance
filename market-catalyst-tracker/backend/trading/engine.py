@@ -469,8 +469,13 @@ class TradingEngine:
                     ctx = self._markets.get(pos.market_id)
                     if not ctx:
                         continue
-                    # Get live price
-                    current = await get_live_midpoint(ctx.yes_token_id)
+                    # Get live price (timeout so stop-loss loop never hangs)
+                    try:
+                        current = await asyncio.wait_for(
+                            get_live_midpoint(ctx.yes_token_id), timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        continue
                     if current is None:
                         continue
                     current_p = current if pos.side == OrderSide.YES else (1 - current)
@@ -534,10 +539,13 @@ class TradingEngine:
         # Paper shadow stats (always available for comparison)
         paper_stats = self._paper.stats() if self.live_mode else {}
 
-        # Pending CLOB orders (live mode only)
+        # Pending CLOB orders (live mode only — skip if CLOB is slow)
         pending_orders: List[Dict] = []
         if self.live_mode and self._live:
-            pending_orders = self._live.get_pending_orders()
+            try:
+                pending_orders = self._live.get_pending_orders()
+            except Exception:
+                pass
 
         return {
             **self.trader.stats(),

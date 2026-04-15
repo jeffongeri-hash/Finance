@@ -44,16 +44,20 @@ RUN pip install --no-cache-dir \
     "langchain-core>=0.3.0" \
     "langchain-openai>=0.3.5" \
     "langchain-anthropic>=0.3.5" \
-    "langchain-groq>=0.2.3" || echo "langchain packages skipped"
+    "langchain-groq>=0.2.3" \
+    "langchain-deepseek>=0.1.2" || echo "langchain packages skipped"
 
 # ── Runtime env ───────────────────────────────────────────────────────────────
 # ai-hedge-fund is at /app/ai-hedge-fund relative to repo root
 ENV AI_HEDGE_FUND_PATH=/app/ai-hedge-fund
 ENV PYTHONUNBUFFERED=1
+# Reduce memory fragmentation on Railway's constrained containers
+ENV MALLOC_ARENA_MAX=2
 
 WORKDIR /app/market-catalyst-tracker/backend
 
 EXPOSE 8000
 
-# Railway injects $PORT; fall back to 8000 locally
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Single worker — Railway free tier has 512MB RAM; multiple workers would OOM.
+# --timeout-keep-alive 5 releases idle connections quickly.
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 5

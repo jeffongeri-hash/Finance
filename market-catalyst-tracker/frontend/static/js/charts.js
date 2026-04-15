@@ -57,8 +57,8 @@ function createChart() {
 }
 
 function addSeries(chart) {
-  // Candlestick series
-  const candle = chart.addSeries(LC.CandlestickSeries, {
+  // Candlestick series (v4 API)
+  const candle = chart.addCandlestickSeries({
     upColor:          "#22c55e",
     downColor:        "#ef4444",
     borderUpColor:    "#22c55e",
@@ -68,7 +68,7 @@ function addSeries(chart) {
   });
 
   // Volume histogram (secondary)
-  const vol = chart.addSeries(LC.HistogramSeries, {
+  const vol = chart.addHistogramSeries({
     priceFormat:   { type: "volume" },
     priceScaleId:  "volume",
     color:         "#3b82f633",
