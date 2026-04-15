@@ -202,61 +202,193 @@ def get_market_news(limit: int = 30) -> List[Dict]:
 
 def get_momentum_data(symbol: str) -> Optional[Dict]:
     """
-    Returns the data needed by the momentum scanner for a single symbol.
-    Pulls 10 days of daily history to compute relative volume.
+    Returns momentum scanner data for a single symbol.
+
+    Uses fast_info for 52-week high/avg-volume (no slow t.info scrape),
+    plus a 2-day history call for today's exact OHLCV.
+    This keeps each call under ~0.5s vs ~15s with t.info.
     """
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="5d", interval="1d", auto_adjust=True, timeout=15)
-        if len(hist) < 3:
-            return None
 
-        today = hist.iloc[-1]
-        prev = hist.iloc[-2]
-        price = _safe_float(today.get("Close"))
-        prev_close = _safe_float(prev.get("Close"))
-        open_price = _safe_float(today.get("Open"))
-        high_52w = _safe_float(hist["High"].max())
-        low_52w = _safe_float(hist["Low"].min())
-        current_vol = _safe_int(today.get("Volume"))
-        avg_vol = int(hist["Volume"].iloc[:-1].mean()) if len(hist) > 1 else 1
+        # fast_info: lightweight, no full page scrape
+        fi = t.fast_info
+        price      = _safe_float(fi.last_price)
+        prev_close = _safe_float(
+            getattr(fi, "previous_close", None)
+            or getattr(fi, "regular_market_previous_close", None)
+        )
+        avg_vol    = _safe_int(getattr(fi, "three_month_average_volume", None) or 0)
+
+        # True 52-week high from fast_info (year_high attribute)
+        high_52w = (
+            _safe_float(getattr(fi, "year_high", None))
+            or _safe_float(getattr(fi, "yearHigh", None))
+        )
 
         if price == 0 or prev_close == 0:
             return None
 
-        change_pct = (price - prev_close) / prev_close * 100
-        gap_pct = (open_price - prev_close) / prev_close * 100 if prev_close else 0
-        rvol = current_vol / avg_vol if avg_vol > 0 else 1.0
+        # 2-day daily history: today's Open + Volume (single fast request)
+        hist = t.history(period="2d", interval="1d", auto_adjust=True, timeout=10)
+        if hist.empty:
+            return None
+
+        today_row  = hist.iloc[-1]
+        open_price = _safe_float(today_row.get("Open") or prev_close)
+        current_vol = _safe_int(today_row.get("Volume") or 0)
+
+        # Fallback: if fast_info had no year_high use history max (poor proxy but better than 0)
+        if not high_52w and not hist.empty:
+            high_52w = _safe_float(hist["High"].max())
+        if not high_52w:
+            high_52w = price
+
+        change_pct        = (price - prev_close) / prev_close * 100
+        gap_pct           = (open_price - prev_close) / prev_close * 100 if prev_close else 0
+        rvol              = current_vol / avg_vol if avg_vol > 0 else 1.0
         from_52w_high_pct = (price - high_52w) / high_52w * 100 if high_52w else 0
 
-        # Short interest if available
-        info = {}
-        try:
-            info = t.info or {}
-        except Exception:
-            pass
-
-        short_pct = _safe_float(info.get("shortPercentOfFloat")) * 100 or None
-        float_shares = _safe_float(info.get("floatShares")) or None
-        name = info.get("shortName") or symbol
-
         return {
-            "symbol": symbol,
-            "company": name,
-            "price": round(price, 4),
-            "change_pct": round(change_pct, 3),
-            "relative_volume": round(rvol, 2),
-            "gap_pct": round(gap_pct, 3),
-            "from_52w_high_pct": round(from_52w_high_pct, 3),
-            "short_interest_pct": round(short_pct, 2) if short_pct else None,
-            "float_shares": float_shares,
-            "high_52w": high_52w,
-            "current_volume": current_vol,
-            "avg_volume": avg_vol,
+            "symbol":             symbol,
+            "company":            symbol,   # skip t.info; company name not worth 10-30s
+            "price":              round(price, 4),
+            "change_pct":         round(change_pct, 3),
+            "relative_volume":    round(rvol, 2),
+            "gap_pct":            round(gap_pct, 3),
+            "from_52w_high_pct":  round(from_52w_high_pct, 3),
+            "short_interest_pct": None,   # requires t.info — skipped for speed
+            "float_shares":       None,
+            "high_52w":           high_52w,
+            "current_volume":     current_vol,
+            "avg_volume":         avg_vol,
         }
     except Exception as e:
         logger.debug("momentum data %s: %s", symbol, e)
         return None
+
+
+def get_analyst_info(symbol: str) -> Dict:
+    """
+    Pull analyst consensus data from yfinance — no API key required.
+    Used by the Equity Quick Analysis route as a fast, accurate alternative
+    to the LLM hedge-fund workflow when FINANCIAL_DATASETS_API_KEY is absent.
+
+    Returns:
+      recommendations     — recent broker upgrades/downgrades
+      price_targets       — analyst price target stats
+      earnings_estimate   — EPS estimate for next quarter
+      institutional       — top institutional holders
+      insiders            — recent insider transactions
+      info_summary        — key company stats (sector, P/E, 52w range, etc.)
+    """
+    result: Dict = {
+        "symbol": symbol,
+        "recommendations": [],
+        "price_targets": {},
+        "earnings_estimate": {},
+        "institutional": [],
+        "insiders": [],
+        "info_summary": {},
+    }
+    try:
+        t = yf.Ticker(symbol)
+
+        # Analyst recommendations (buy/sell/hold trend)
+        try:
+            rec = t.recommendations
+            if rec is not None and not rec.empty:
+                # Last 5 broker actions
+                result["recommendations"] = (
+                    rec.sort_index(ascending=False)
+                    .head(10)
+                    .reset_index()
+                    .rename(columns={"index": "date"})
+                    .to_dict("records")
+                )
+        except Exception:
+            pass
+
+        # Analyst price targets
+        try:
+            pt = t.analyst_price_targets
+            if pt:
+                result["price_targets"] = {
+                    "current":  _safe_float(pt.get("current")),
+                    "low":      _safe_float(pt.get("low")),
+                    "high":     _safe_float(pt.get("high")),
+                    "mean":     _safe_float(pt.get("mean")),
+                    "median":   _safe_float(pt.get("median")),
+                }
+        except Exception:
+            pass
+
+        # Earnings estimate (next quarter EPS)
+        try:
+            ee = t.earnings_estimate
+            if ee is not None and not ee.empty:
+                row = ee.iloc[0] if len(ee) > 0 else None
+                if row is not None:
+                    result["earnings_estimate"] = {
+                        "period":    str(ee.index[0]) if len(ee.index) > 0 else "",
+                        "avg_est":   _safe_float(row.get("avg")),
+                        "low_est":   _safe_float(row.get("low")),
+                        "high_est":  _safe_float(row.get("high")),
+                        "num_analysts": _safe_int(row.get("numberOfAnalysts")),
+                    }
+        except Exception:
+            pass
+
+        # Top institutional holders
+        try:
+            ih = t.institutional_holders
+            if ih is not None and not ih.empty:
+                result["institutional"] = (
+                    ih.head(5)
+                    .to_dict("records")
+                )
+        except Exception:
+            pass
+
+        # Recent insider transactions
+        try:
+            ins = t.insider_transactions
+            if ins is not None and not ins.empty:
+                result["insiders"] = (
+                    ins.head(8)
+                    .to_dict("records")
+                )
+        except Exception:
+            pass
+
+        # Key company stats (info — slow but only called once per snapshot)
+        try:
+            info = t.info or {}
+            result["info_summary"] = {
+                "name":          info.get("shortName") or symbol,
+                "sector":        info.get("sector") or "",
+                "industry":      info.get("industry") or "",
+                "pe_ratio":      _safe_float(info.get("trailingPE")),
+                "forward_pe":    _safe_float(info.get("forwardPE")),
+                "ps_ratio":      _safe_float(info.get("priceToSalesTrailing12Months")),
+                "pb_ratio":      _safe_float(info.get("priceToBook")),
+                "market_cap":    _safe_float(info.get("marketCap")),
+                "52w_high":      _safe_float(info.get("fiftyTwoWeekHigh")),
+                "52w_low":       _safe_float(info.get("fiftyTwoWeekLow")),
+                "beta":          _safe_float(info.get("beta")),
+                "short_pct":     _safe_float(info.get("shortPercentOfFloat")) * 100,
+                "dividend_yield": _safe_float(info.get("dividendYield")),
+                "recommendation": info.get("recommendationKey") or "",
+                "target_mean":   _safe_float(info.get("targetMeanPrice")),
+                "description":   (info.get("longBusinessSummary") or "")[:400],
+            }
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.warning("get_analyst_info %s: %s", symbol, e)
+
+    return result
 
 
 def get_etf_holdings_tickers(etf_symbol: str, limit: int = 50) -> List[str]:

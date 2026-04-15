@@ -30,7 +30,7 @@ from models.schemas import MomentumCandidate, ScanResult
 
 logger = logging.getLogger(__name__)
 
-_THREAD_WORKERS = 4    # reduced for cloud deployment (512MB RAM limit)
+_THREAD_WORKERS = 8    # safe now that get_momentum_data no longer calls t.info
 
 
 # ── Scoring ────────────────────────────────────────────────────────────────────
@@ -125,45 +125,55 @@ def _fetch_one(symbol: str) -> Optional[Dict]:
 async def run_momentum_scan(
     universe: Optional[List[str]] = None,
     top_n: int = 30,
-    min_score: float = 20.0,
-    min_rvol: float = 1.5,
+    min_score: float = 10.0,   # lowered: 20 was too strict without t.info short-interest
+    min_rvol: float = 1.2,     # lowered: capture moderate volume spikes too
 ) -> ScanResult:
     """
     Full momentum scan.
     Returns top_n candidates sorted by score (descending).
+
+    Scoring uses fast_info data (no t.info) so scores are lower on average —
+    min_score=10 keeps the list meaningful without requiring short-interest data.
     """
-    # Cap at 40 tickers by default — enough signal, won't OOM on cloud (512MB RAM)
-    tickers = universe or MOMENTUM_UNIVERSE[:40]
+    # Cap at 50 tickers — fast_info calls are ~0.3s each so 50 tickers ≈ 6s on 8 workers
+    tickers = universe or MOMENTUM_UNIVERSE[:50]
     logger.info("Momentum scan starting: %d tickers", len(tickers))
 
-    loop = asyncio.get_event_loop()
     raw_results: List[Dict] = []
 
-    # Run in thread pool (yfinance is sync)
     with ThreadPoolExecutor(max_workers=_THREAD_WORKERS) as pool:
         futures = {pool.submit(_fetch_one, sym): sym for sym in tickers}
-        completed_futures = as_completed(futures, timeout=60)
-        for fut in completed_futures:
-            result = fut.result()
-            if result:
-                raw_results.append(result)
+        for fut in as_completed(futures, timeout=90):
+            try:
+                result = fut.result()
+                if result:
+                    raw_results.append(result)
+            except Exception:
+                pass
 
-    # Filter and score
+    # Score ALL fetched results, then filter — don't pre-filter by rvol
+    # so we capture breakout + gap signals even on average volume days
     candidates: List[MomentumCandidate] = []
     for data in raw_results:
-        if (
+        has_signal = (
             data.get("relative_volume", 0) >= min_rvol
-            or abs(data.get("gap_pct", 0)) >= 3
-            or (data.get("from_52w_high_pct", -999) >= -5)
-        ):
-            c = _build_candidate(data)
-            if c.score >= min_score:
-                candidates.append(c)
+            or abs(data.get("gap_pct", 0)) >= 2.0
+            or data.get("from_52w_high_pct", -999) >= -10.0   # within 10% of 52w high
+            or abs(data.get("change_pct", 0)) >= 3.0          # any 3%+ mover
+        )
+        if not has_signal:
+            continue
+        c = _build_candidate(data)
+        if c.score >= min_score:
+            candidates.append(c)
 
     # Sort by score descending
     candidates.sort(key=lambda x: x.score, reverse=True)
 
-    logger.info("Momentum scan complete: %d candidates from %d tickers", len(candidates), len(tickers))
+    logger.info(
+        "Momentum scan complete: %d candidates from %d/%d tickers",
+        len(candidates), len(raw_results), len(tickers),
+    )
     return ScanResult(
         candidates=candidates[:top_n],
         scanned=len(raw_results),

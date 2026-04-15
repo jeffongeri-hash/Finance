@@ -339,13 +339,17 @@ async def upcoming_catalysts(days: int = Query(90, ge=1, le=365)):
 
 @app.get("/api/momentum/scan", response_model=ScanResult)
 async def momentum_scan(
-    min_rvol: float = Query(1.5, ge=1.0, le=20.0),
-    min_score: float = Query(20.0, ge=0.0, le=100.0),
+    min_rvol: float = Query(1.2, ge=1.0, le=20.0),
+    min_score: float = Query(10.0, ge=0.0, le=100.0),
     top_n: int = Query(30, ge=1, le=100),
 ):
     """
     Full momentum scan — screens the universe for high-rvol, gap, breakout,
-    and short squeeze candidates. Cached 5 minutes.
+    and short squeeze candidates. Cached 10 minutes.
+
+    Thresholds lowered (min_rvol 1.5→1.2, min_score 20→10) because the scanner
+    now uses fast_info only (no t.info short-interest data), so raw scores are
+    lower on average. This still filters out flat/low-activity stocks.
     """
     cache_key = f"momentum_{min_rvol}_{min_score}_{top_n}"
     result = await _acached(
@@ -1127,6 +1131,78 @@ async def ws_prices(websocket: WebSocket):
 
 
 # ── Equity AI Routes ──────────────────────────────────────────────────────────
+
+@app.get("/api/equity/quick/{ticker}")
+async def equity_quick_analysis(ticker: str):
+    """
+    Fast equity analysis using yfinance — no API keys required.
+
+    Returns analyst consensus (buy/sell/hold), price targets from broker
+    research, EPS estimates, institutional ownership, and recent insider
+    activity.  Runs in ~3-5 seconds vs 30-60s for the LLM workflow.
+
+    Use this when FINANCIAL_DATASETS_API_KEY / LLM keys are not configured,
+    or whenever you want a quick data-driven view without waiting for AI.
+    """
+    from data.yfinance_adapter import get_analyst_info, get_quote, get_news
+    from analysis.news_correlator import correlate_symbol_news
+
+    sym = ticker.upper().strip()
+    loop = asyncio.get_event_loop()
+
+    # Run all fetches concurrently
+    analyst_t = loop.run_in_executor(_executor, get_analyst_info, sym)
+    news_t    = loop.run_in_executor(_executor, correlate_symbol_news, sym)
+
+    analyst_data, news_data = await asyncio.gather(
+        analyst_t, news_t, return_exceptions=True
+    )
+
+    if isinstance(analyst_data, Exception):
+        analyst_data = {"symbol": sym}
+    if isinstance(news_data, Exception):
+        news_data = {}
+
+    info = analyst_data.get("info_summary", {})
+    pt   = analyst_data.get("price_targets", {})
+    rec  = analyst_data.get("recommendations", [])
+    ee   = analyst_data.get("earnings_estimate", {})
+
+    # Build a quick verdict from analyst consensus
+    rec_key = info.get("recommendation", "").lower()
+    verdict_map = {
+        "strong_buy": "STRONG BUY",  "buy": "BUY",
+        "hold": "HOLD",              "underperform": "UNDERPERFORM",
+        "sell": "SELL",
+    }
+    verdict = verdict_map.get(rec_key, "NO RATING")
+
+    # Count recent upgrades vs downgrades
+    upgrades   = sum(1 for r in rec if str(r.get("To Grade", "")).lower() in ("buy", "strong buy", "outperform", "overweight"))
+    downgrades = sum(1 for r in rec if str(r.get("To Grade", "")).lower() in ("sell", "underperform", "underweight"))
+
+    return {
+        "ticker":          sym,
+        "verdict":         verdict,
+        "recommendation":  rec_key,
+        "upgrades_recent": upgrades,
+        "downgrades_recent": downgrades,
+        "price_targets":   pt,
+        "earnings_estimate": ee,
+        "info":            info,
+        "recent_actions":  rec[:8],
+        "institutional":   analyst_data.get("institutional", [])[:5],
+        "insiders":        analyst_data.get("insiders", [])[:6],
+        "catalyst":        {
+            "primary_driver": news_data.get("primary_driver"),
+            "driver_label":   news_data.get("driver_label"),
+            "summary":        news_data.get("summary"),
+            "change_pct":     news_data.get("change_pct"),
+        },
+        "data_source":     "yfinance (no API key required)",
+        "timestamp":       int(time.time()),
+    }
+
 
 @app.get("/api/equity/status")
 async def equity_ai_status():
