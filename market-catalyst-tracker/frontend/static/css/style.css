@@ -1204,3 +1204,74 @@ details > summary::-webkit-details-marker {
 
 /* Nav bottom pin */
 .nav-section-label[style*="margin-top:auto"] { margin-top:auto; }
+
+/* ── IBKR Trading Dashboard ────────────────────────────────────────────────── */
+
+/* Gateway status bar */
+.ib-gw-bar        { padding:8px 16px; border-radius:8px; font-size:12px; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+.ib-gw-ok         { background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.25); color:#86efac; }
+.ib-gw-off        { background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); color:#fca5a5; }
+.ib-gw-bar a      { color:#a5b4fc; }
+
+/* Dot indicator */
+.ib-dot           { width:8px; height:8px; border-radius:50%; display:inline-block; flex-shrink:0; }
+.ib-dot.green     { background:#22c55e; box-shadow:0 0 6px #22c55e88; }
+.ib-dot.red       { background:#ef4444; }
+
+/* Portfolio cards grid */
+.ib-cards-grid    { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px; }
+.ib-card          { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+.ib-card-label    { font-size:11px; color:var(--text-muted); margin-bottom:6px; text-transform:uppercase; letter-spacing:.04em; }
+.ib-card-value    { font-size:18px; font-weight:700; font-family:var(--font-mono); }
+.ib-card-sub      { font-size:10px; margin-top:3px; }
+
+/* P&L colours */
+.ib-pos           { color:#22c55e; }
+.ib-neg           { color:#ef4444; }
+.ib-bull          { color:#22c55e; }
+.ib-bear          { color:#ef4444; }
+.ib-amber         { color:#f59e0b; }
+.ib-muted         { color:var(--text-muted); }
+
+/* Tabs */
+.ib-tabs          { display:flex; gap:2px; margin-bottom:8px; background:var(--card); border:1px solid var(--border); border-radius:10px; padding:4px; overflow-x:auto; }
+.ib-tab-btn       { flex-shrink:0; padding:6px 14px; border-radius:7px; font-size:12px; font-weight:500; background:transparent; border:none; color:var(--text-secondary); cursor:pointer; transition:all .15s; }
+.ib-tab-btn:hover { color:var(--text-primary); background:rgba(255,255,255,0.05); }
+.ib-tab-btn.active { background:var(--accent); color:#fff; }
+.ib-tab-panel     { display:none; }
+.ib-tab-panel.active { display:block; }
+
+/* Tables */
+.ib-table         { width:100%; border-collapse:collapse; font-size:12px; }
+.ib-table th      { padding:8px 12px; text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); border-bottom:1px solid var(--border); white-space:nowrap; }
+.ib-table td      { padding:9px 12px; border-bottom:1px solid rgba(255,255,255,0.04); vertical-align:top; }
+.ib-table tr:last-child td { border-bottom:none; }
+.ib-table tr:hover td { background:rgba(255,255,255,0.02); }
+.ib-row-open td   { background:rgba(99,102,241,0.05); }
+
+/* Badges */
+.ib-signal-badge  { display:inline-block; padding:1px 6px; border-radius:4px; font-size:10px; font-weight:600; background:rgba(99,102,241,0.2); color:#a5b4fc; margin:1px; }
+.ib-sig-breakout  { background:rgba(34,197,94,0.15); color:#86efac; }
+.ib-sig-gap_up    { background:rgba(34,197,94,0.12); color:#86efac; }
+.ib-sig-high_vol  { background:rgba(59,130,246,0.15); color:#93c5fd; }
+.ib-sig-squeeze   { background:rgba(245,158,11,0.15); color:#fcd34d; }
+.ib-sig-gap_down  { background:rgba(239,68,68,0.12); color:#fca5a5; }
+.ib-sig-momentum  { background:rgba(99,102,241,0.15); color:#c4b5fd; }
+.ib-action-badge  { display:inline-block; padding:2px 8px; border-radius:5px; font-size:11px; font-weight:700; }
+.ib-status-badge  { display:inline-block; padding:1px 7px; border-radius:4px; font-size:10px; background:rgba(255,255,255,0.07); }
+.ib-open-badge    { display:inline-block; padding:1px 6px; border-radius:4px; font-size:10px; background:rgba(99,102,241,0.2); color:#a5b4fc; }
+
+/* Performance section */
+.ib-perf-grid     { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px; margin-bottom:8px; }
+.ib-stat-card     { background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:12px 14px; text-align:center; }
+.ib-stat-val      { font-size:20px; font-weight:700; font-family:var(--font-mono); }
+.ib-stat-lbl      { font-size:10px; color:var(--text-muted); margin-top:4px; }
+.ib-exit-grid     { display:flex; flex-wrap:wrap; gap:8px; }
+.ib-exit-chip     { background:rgba(255,255,255,0.04); border:1px solid var(--border); border-radius:8px; padding:8px 12px; min-width:120px; }
+.ib-exit-reason   { font-size:11px; font-weight:600; color:var(--text-secondary); }
+.ib-exit-count    { font-size:18px; font-weight:700; font-family:var(--font-mono); }
+.ib-exit-pnl      { font-size:12px; font-weight:600; }
+
+/* Account buttons */
+.ib-acct-btn      { font-family:var(--font-mono); font-size:11px; }
+.ib-acct-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }

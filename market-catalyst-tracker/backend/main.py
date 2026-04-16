@@ -1454,6 +1454,226 @@ async def ibkr_tickle():
     return {"ok": ok}
 
 
+# ── IBKR Strategy + Trade Journal Routes ─────────────────────────────────────
+
+@app.get("/api/ibkr/strategy/signals")
+async def ibkr_strategy_signals(top_n: int = Query(20, ge=1, le=50)):
+    """
+    Run the full signal pipeline: momentum scan → social sentiment → entry evaluation.
+    Returns ranked list of candidates with BUY / HOLD / AVOID verdicts and all
+    the conditions that led to each decision.
+    """
+    from trading.strategy_engine import scan_for_entries
+    result = await _acached("strategy_signals", 120, scan_for_entries(top_n=top_n))
+    return {
+        "signals":   [s.to_dict() for s in result],
+        "buy_count": sum(1 for s in result if s.action == "BUY"),
+        "timestamp": int(time.time()),
+    }
+
+
+@app.get("/api/ibkr/strategy/evaluate/{symbol}")
+async def ibkr_strategy_evaluate(symbol: str):
+    """
+    Deep signal evaluation for a single symbol:
+    momentum + social sentiment + technical + news catalyst combined.
+    """
+    from trading.strategy_engine import compute_composite_signal
+    from data.yfinance_adapter import get_momentum_data
+    from data.adanos_adapter import get_sentiment_snapshot
+    from analysis.news_correlator import correlate_symbol_news
+
+    sym = symbol.upper().strip()
+    loop = asyncio.get_event_loop()
+
+    mom_t  = loop.run_in_executor(_executor, get_momentum_data, sym)
+    sent_t = loop.run_in_executor(_executor, get_sentiment_snapshot, sym, 3)
+    news_t = loop.run_in_executor(_executor, correlate_symbol_news, sym)
+
+    mom, sent, news = await asyncio.gather(mom_t, sent_t, news_t, return_exceptions=True)
+    if isinstance(mom,  Exception): mom  = None
+    if isinstance(sent, Exception): sent = None
+    if isinstance(news, Exception): news = {}
+
+    # Build momentum_data dict in expected format
+    mom_data = None
+    if mom:
+        from analysis.momentum_scanner import _score, _detect_signals
+        mom_data = {**mom, "score": _score(mom), "signals": _detect_signals(mom)}
+
+    sig = compute_composite_signal(sym, mom_data, sent, news_data=news)
+    return sig.to_dict()
+
+
+@app.post("/api/ibkr/strategy/size")
+async def ibkr_strategy_size(
+    symbol:        str   = Query(...),
+    account_id:    str   = Query(...),
+    entry_price:   float = Query(...),
+):
+    """Calculate recommended position size for a symbol given the account balance."""
+    from trading.strategy_engine import calc_position_size
+    from trading.ibkr_adapter import get_account_summary
+    loop = asyncio.get_event_loop()
+    summary = await loop.run_in_executor(_executor, get_account_summary, account_id)
+    account_value = summary.get("NetLiquidation") or summary.get("TotalCashValue") or 0
+    sizing = calc_position_size(account_value, entry_price)
+    return {
+        "symbol":          symbol.upper(),
+        "account_value":   account_value,
+        "entry_price":     entry_price,
+        **sizing,
+    }
+
+
+# ── Trade Journal Routes ──────────────────────────────────────────────────────
+
+@app.get("/api/journal/trades")
+async def journal_trades(
+    limit:       int            = Query(100, ge=1, le=500),
+    symbol:      Optional[str]  = Query(None),
+    account_id:  str            = Query(""),
+    include_open: bool          = Query(False, description="Include open (not yet closed) trades"),
+):
+    """Trade history: all closed trades. Set include_open=true to see open positions too."""
+    from trading.trade_journal import get_trade_history
+    loop = asyncio.get_event_loop()
+    trades = await loop.run_in_executor(
+        _executor, get_trade_history, limit, symbol, account_id, not include_open
+    )
+    return {"trades": trades, "count": len(trades)}
+
+
+@app.get("/api/journal/open")
+async def journal_open(account_id: str = Query("")):
+    """All currently open (un-exited) journal positions."""
+    from trading.trade_journal import get_open_trades
+    loop = asyncio.get_event_loop()
+    trades = await loop.run_in_executor(_executor, get_open_trades, account_id)
+    return {"trades": trades, "count": len(trades)}
+
+
+@app.get("/api/journal/stats")
+async def journal_stats(account_id: str = Query("")):
+    """
+    Performance statistics and signal accuracy (learning loop).
+    Shows win rate, avg P&L, best/worst trades, and which signals have
+    the best track record — so the strategy can be tuned over time.
+    """
+    from trading.trade_journal import get_performance_stats
+    loop = asyncio.get_event_loop()
+    stats = await loop.run_in_executor(_executor, get_performance_stats, account_id)
+    return stats
+
+
+@app.post("/api/journal/entry")
+async def journal_record_entry(
+    symbol:       str   = Query(...),
+    entry_price:  float = Query(...),
+    shares:       float = Query(...),
+    account_id:   str   = Query(""),
+    ibkr_order_id: str  = Query(""),
+):
+    """
+    Manually record a trade entry in the journal.
+    The strategy bot calls this automatically; you can also call it manually
+    to log trades placed directly in TWS.
+    """
+    from trading.trade_journal import record_entry
+    from trading.strategy_engine import compute_composite_signal
+    from data.yfinance_adapter import get_momentum_data
+
+    sym = symbol.upper().strip()
+    loop = asyncio.get_event_loop()
+    mom = await loop.run_in_executor(_executor, get_momentum_data, sym)
+
+    mom_data = None
+    if mom:
+        from analysis.momentum_scanner import _score, _detect_signals
+        mom_data = {**mom, "score": _score(mom), "signals": _detect_signals(mom)}
+
+    sig = compute_composite_signal(sym, mom_data)
+    trade_id = await loop.run_in_executor(
+        _executor, record_entry, sym, entry_price, shares, sig, account_id, ibkr_order_id
+    )
+    return {"trade_id": trade_id, "symbol": sym, "entry_price": entry_price, "shares": shares}
+
+
+@app.post("/api/journal/exit/{trade_id}")
+async def journal_record_exit(
+    trade_id:    int,
+    exit_price:  float = Query(...),
+    exit_reason: str   = Query("MANUAL", description="STOP_LOSS|TAKE_PROFIT|TRAILING|TIME|SIGNAL_REVERSAL|MANUAL"),
+    fees:        float = Query(0.0),
+    notes:       str   = Query(""),
+):
+    """Record the exit of a trade and compute final P&L + update signal accuracy stats."""
+    from trading.trade_journal import record_exit
+    loop = asyncio.get_event_loop()
+    trade = await loop.run_in_executor(
+        _executor, record_exit, trade_id, exit_price, exit_reason, fees, "", notes
+    )
+    return trade
+
+
+@app.get("/api/journal/dashboard")
+async def journal_dashboard(account_id: str = Query("")):
+    """
+    Combined IBKR + journal dashboard payload.
+    Single request to populate the full trading dashboard:
+      - Gateway status + accounts
+      - Portfolio summary (if gateway connected)
+      - Open positions (IBKR + journal open trades)
+      - Open orders
+      - Recent trade history (last 20)
+      - Performance stats
+      - Current strategy signals (top 10 BUY candidates)
+    """
+    from trading.ibkr_adapter import get_auth_status, get_accounts, get_portfolio_snapshot, get_open_orders
+    from trading.trade_journal import get_open_trades, get_trade_history, get_performance_stats
+    from trading.strategy_engine import scan_for_entries
+
+    loop = asyncio.get_event_loop()
+
+    # Run everything concurrently
+    gw_status_t  = loop.run_in_executor(_executor, get_auth_status)
+    jrnl_open_t  = loop.run_in_executor(_executor, get_open_trades, account_id)
+    history_t    = loop.run_in_executor(_executor, get_trade_history, 20, None, account_id, True)
+    stats_t      = loop.run_in_executor(_executor, get_performance_stats, account_id)
+    signals_task = scan_for_entries(top_n=10)
+
+    gw_status, jrnl_open, history, stats = await asyncio.gather(
+        gw_status_t, jrnl_open_t, history_t, stats_t, return_exceptions=True
+    )
+    signals = await signals_task
+
+    if isinstance(gw_status, Exception): gw_status = {"authenticated": False}
+    if isinstance(jrnl_open, Exception): jrnl_open = []
+    if isinstance(history,   Exception): history   = []
+    if isinstance(stats,     Exception): stats     = {}
+
+    # Fetch IBKR live data only if gateway is connected
+    portfolio = {}
+    ibkr_orders: List[Dict] = []
+    if isinstance(gw_status, dict) and gw_status.get("authenticated") and account_id:
+        try:
+            portfolio   = await loop.run_in_executor(_executor, get_portfolio_snapshot, account_id)
+            ibkr_orders = await loop.run_in_executor(_executor, get_open_orders)
+        except Exception:
+            pass
+
+    return {
+        "gateway":          gw_status,
+        "portfolio":        portfolio,
+        "ibkr_orders":      ibkr_orders,
+        "journal_open":     jrnl_open,
+        "trade_history":    history,
+        "performance":      stats,
+        "top_signals":      [s.to_dict() for s in signals if s.action == "BUY"][:5],
+        "timestamp":        int(time.time()),
+    }
+
+
 # ── Finance-Skills Equity Research Routes ────────────────────────────────────
 # Powered by Funda AI (fundamentals, earnings, filings) and
 # Adanos Finance (social sentiment across Reddit, X, news, Polymarket).

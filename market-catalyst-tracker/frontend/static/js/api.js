@@ -140,6 +140,13 @@ export const Fmt = {
     if (v == null || isNaN(v)) return "—";
     return `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
   },
+  currency: (v) => {
+    if (v == null || isNaN(v)) return "—";
+    const abs = Math.abs(Number(v));
+    const sign = Number(v) < 0 ? "-" : "";
+    if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+    return `${sign}$${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  },
   bigNum: (v) => {
     if (v == null || isNaN(v)) return "—";
     if (v >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
