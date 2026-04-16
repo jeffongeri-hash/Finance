@@ -1322,6 +1322,138 @@ async def equity_analyze_single(
     return result
 
 
+# ── Interactive Brokers Routes ────────────────────────────────────────────────
+# Requires the IBKR Client Portal Gateway running locally at localhost:5000.
+# Authenticate once in your browser at https://localhost:5000 then these
+# routes proxy your requests through to IBKR.
+
+@app.get("/api/ibkr/status")
+async def ibkr_status():
+    """
+    Check if the Client Portal Gateway is reachable and the session is authenticated.
+    Returns connection status, auth state, and list of accounts.
+    """
+    from trading.ibkr_adapter import get_auth_status, get_accounts
+    loop = asyncio.get_event_loop()
+    status = await loop.run_in_executor(_executor, get_auth_status)
+    accounts: List[str] = []
+    if status.get("authenticated"):
+        accounts = await loop.run_in_executor(_executor, get_accounts)
+    return {**status, "accounts": accounts}
+
+
+@app.get("/api/ibkr/portfolio")
+async def ibkr_portfolio(account_id: str = Query(..., description="IBKR account ID e.g. U1234567")):
+    """
+    Full portfolio snapshot: net liquidation, cash, buying power, open positions, P&L.
+    Requires authenticated gateway session.
+    """
+    from trading.ibkr_adapter import get_portfolio_snapshot
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(_executor, get_portfolio_snapshot, account_id)
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"IBKR error: {e}")
+
+
+@app.get("/api/ibkr/orders")
+async def ibkr_orders():
+    """All open/pending orders across accounts."""
+    from trading.ibkr_adapter import get_open_orders
+    loop = asyncio.get_event_loop()
+    try:
+        orders = await loop.run_in_executor(_executor, get_open_orders)
+        return {"orders": orders, "count": len(orders)}
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/ibkr/quote/{symbol}")
+async def ibkr_quote(symbol: str):
+    """Live quote for a stock via IBKR (last, bid, ask, 52w range)."""
+    from trading.ibkr_adapter import get_stock_quote
+    loop = asyncio.get_event_loop()
+    try:
+        quote = await loop.run_in_executor(_executor, get_stock_quote, symbol.upper())
+        if not quote:
+            raise HTTPException(status_code=404, detail=f"No contract found for {symbol}")
+        return quote
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/api/ibkr/order")
+async def ibkr_place_order(
+    account_id:  str   = Query(..., description="IBKR account ID"),
+    symbol:      str   = Query(..., description="Ticker e.g. AAPL"),
+    action:      str   = Query(..., description="BUY or SELL"),
+    quantity:    float = Query(..., description="Number of shares"),
+    order_type:  str   = Query("MKT", description="MKT | LMT | STP | STP LMT"),
+    limit_price: Optional[float] = Query(None, description="Limit price (LMT orders)"),
+    stop_price:  Optional[float] = Query(None, description="Stop price (STP orders)"),
+    tif:         str   = Query("DAY", description="DAY | GTC | IOC"),
+    outside_rth: bool  = Query(False, description="Allow pre/after-market execution"),
+):
+    """
+    Place a stock order via IBKR Client Portal API.
+    Automatically resolves symbol → contract ID, then submits the order.
+    Handles IBKR's confirmation reply flow automatically.
+
+    Paper trading: authenticate the gateway with your paper account.
+    Live trading:  authenticate with your live account.
+    """
+    from trading.ibkr_adapter import search_contract, place_order
+    loop = asyncio.get_event_loop()
+
+    if action.upper() not in ("BUY", "SELL"):
+        raise HTTPException(status_code=400, detail="action must be BUY or SELL")
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity must be > 0")
+
+    try:
+        contract = await loop.run_in_executor(_executor, search_contract, symbol.upper())
+        if not contract or not contract.get("conid"):
+            raise HTTPException(status_code=404, detail=f"No IBKR contract found for {symbol}")
+
+        result = await loop.run_in_executor(
+            _executor, place_order,
+            account_id, contract["conid"], action.upper(), quantity,
+            order_type, limit_price, stop_price, tif, outside_rth,
+        )
+        return {"contract": contract, "order_result": result}
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("IBKR order failed")
+        raise HTTPException(status_code=500, detail=f"Order error: {e}")
+
+
+@app.delete("/api/ibkr/order/{order_id}")
+async def ibkr_cancel_order(
+    order_id:   str = ...,
+    account_id: str = Query(..., description="IBKR account ID"),
+):
+    """Cancel an open IBKR order."""
+    from trading.ibkr_adapter import cancel_order
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(_executor, cancel_order, account_id, order_id)
+        return result
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/api/ibkr/tickle")
+async def ibkr_tickle():
+    """Keep the gateway session alive. Call every 60 seconds from the frontend."""
+    from trading.ibkr_adapter import tickle
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(_executor, tickle)
+    return {"ok": ok}
+
+
 # ── Finance-Skills Equity Research Routes ────────────────────────────────────
 # Powered by Funda AI (fundamentals, earnings, filings) and
 # Adanos Finance (social sentiment across Reddit, X, news, Polymarket).
@@ -1652,6 +1784,14 @@ _KEY_DEFS = {
         "sensitive":   True,
         "placeholder": "Reddit / X.com / news / Polymarket sentiment per ticker",
         "docs_url":    "https://api.adanos.org/docs",
+    },
+    # ── Interactive Brokers ───────────────────────────────────────────────────
+    "IBKR_GATEWAY_URL": {
+        "group":       "Interactive Brokers",
+        "label":       "Gateway URL (optional)",
+        "sensitive":   False,
+        "placeholder": "https://localhost:5000  (default — change if gateway runs elsewhere)",
+        "docs_url":    "https://www.interactivebrokers.com/en/trading/ib-api.php",
     },
 }
 

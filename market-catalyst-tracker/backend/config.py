@@ -10,8 +10,12 @@ load_dotenv()
 
 FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
 FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
-# Nasdaq Data Link (formerly Quandl) — enables FINRA short interest, EOD history, FRED macro
 NASDAQ_DATA_LINK_API_KEY: str = os.getenv("NASDAQ_DATA_LINK_API_KEY", "")
+
+# ── Interactive Brokers Client Portal Gateway ──────────────────────────────────
+# No API key needed — auth happens via browser login at the gateway URL.
+# IBKR_GATEWAY_URL: URL of the running Client Portal Gateway (default localhost:5000)
+IBKR_GATEWAY_URL: str = os.getenv("IBKR_GATEWAY_URL", "https://localhost:5000")
 
 # ── finance-skills data providers ─────────────────────────────────────────────
 # Funda AI — 60+ endpoints: quotes, fundamentals, options flow/GEX, SEC filings,
