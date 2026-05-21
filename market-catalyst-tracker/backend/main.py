@@ -1526,6 +1526,179 @@ async def ibkr_strategy_size(
     }
 
 
+# ── VORTEX-1 Routes ───────────────────────────────────────────────────────────
+# Citadel-style quant strategy: Volatility-Anchored Momentum + Sentiment
+# Exhaustion Reversal. 5-filter confluence entry, dual-TP exits, regime filter.
+
+@app.get("/api/ibkr/vortex/regime")
+async def vortex_regime():
+    """
+    Current market regime from SPY 50D/200D SMA + VIX.
+    Returns BULL / BEAR / CHOP with the underlying indicator values.
+    """
+    from trading.vortex_strategy import get_market_regime, MarketRegime, _sma
+    import yfinance as yf
+
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        vix_val  = float(yf.Ticker("^VIX").fast_info.last_price)
+        spy      = yf.Ticker("SPY")
+        spy_d    = spy.history(period="300d", interval="1d")
+        spy_c    = spy_d["Close"]
+        sma50    = float(_sma(spy_c, 50).iloc[-1])
+        sma200   = float(_sma(spy_c, 200).iloc[-1])
+        price    = float(spy_c.iloc[-1])
+        regime   = get_market_regime(vix_val, spy_c)
+        return {
+            "regime":    regime.value,
+            "vix":       round(vix_val, 2),
+            "spy_price": round(price, 2),
+            "spy_sma50": round(sma50, 2),
+            "spy_sma200":round(sma200, 2),
+            "above_50d": price > sma50,
+            "above_200d":price > sma200,
+            "regime_rules": {
+                "BULL": "SPY > 50D & 200D SMA, VIX < 20 → long only, TP=3R",
+                "BEAR": "SPY < 50D & 200D SMA, VIX > 25 → short/cash, size×0.5",
+                "CHOP": "between → max 1 trade/day, highest conviction only",
+            },
+            "timestamp": int(time.time()),
+        }
+
+    try:
+        result = await loop.run_in_executor(_executor, _fetch)
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"regime fetch failed: {exc}")
+
+
+@app.get("/api/ibkr/vortex/scan")
+async def vortex_scan(
+    account_value: float = Query(1000.0, ge=100, description="Account value for position sizing"),
+):
+    """
+    Scan the full VORTEX-1 universe (SPY, QQQ, IWM, NVDA, AAPL, TSLA, AMZN,
+    META, XLK, XLE, SOXX) and evaluate all 5 entry filters per symbol.
+    Returns ranked list — BUY_LONG signals first, then by filter score.
+    Cached 5 minutes.
+    """
+    from trading.vortex_strategy import scan_vortex_universe
+    loop   = asyncio.get_event_loop()
+    result = await _acached(
+        f"vortex_scan_{int(account_value)}",
+        300,
+        loop.run_in_executor(_executor, scan_vortex_universe, account_value),
+    )
+    return result
+
+
+@app.get("/api/ibkr/vortex/evaluate/{symbol}")
+async def vortex_evaluate(
+    symbol:        str,
+    account_value: float = Query(1000.0, ge=100),
+):
+    """
+    Evaluate all 5 VORTEX-1 entry filters for a single symbol.
+    Returns filter-by-filter pass/fail reasoning plus entry/stop/TP prices
+    and position sizing if all 5 filters pass.
+    """
+    from trading.vortex_strategy import (
+        evaluate_entry, get_market_regime, MarketRegime, _hv_rank,
+    )
+    import yfinance as yf
+
+    sym  = symbol.upper().strip()
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        t      = yf.Ticker(sym)
+        hourly = t.history(period="60d",  interval="1h")
+        daily  = t.history(period="300d", interval="1d")
+        vix    = float(yf.Ticker("^VIX").fast_info.last_price)
+        spy_d  = yf.Ticker("SPY").history(period="300d", interval="1d")
+        regime = get_market_regime(vix, spy_d["Close"])
+        ivr    = _hv_rank(daily["Close"])
+        sig    = evaluate_entry(sym, hourly, daily, vix, ivr, regime, account_value)
+        return sig.to_dict()
+
+    try:
+        return await loop.run_in_executor(_executor, _fetch)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/ibkr/vortex/backtest")
+async def vortex_backtest(
+    symbol:          str   = Query(..., description="Ticker to backtest (e.g. SPY)"),
+    start_date:      Optional[str] = Query(None, description="YYYY-MM-DD start"),
+    end_date:        Optional[str] = Query(None, description="YYYY-MM-DD end"),
+    initial_capital: float = Query(1000.0, ge=100, description="Starting capital"),
+    max_days:        int   = Query(365, ge=30, le=730, description="Max history days"),
+):
+    """
+    Walk-forward bar-by-bar backtest of VORTEX-1 on historical 1H data.
+
+    Returns per-trade log, equity curve, win rate, Sharpe, max drawdown,
+    profit factor, expected R per trade, and regime-breakdown stats.
+    Note: yfinance caps 1H data at ~730 days. Use max_days <= 365 for reliability.
+    """
+    from trading.vortex_backtester import VortexBacktester
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        bt = VortexBacktester(initial_capital=initial_capital)
+        return bt.run(
+            symbol     = symbol.upper().strip(),
+            start_date = start_date,
+            end_date   = end_date,
+            max_days   = max_days,
+        ).to_dict()
+
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(_executor, _run),
+            timeout=120,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="backtest timed out (120s). Try a shorter date range.")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/ibkr/vortex/size")
+async def vortex_size(
+    symbol:        str   = Query(...),
+    entry_price:   float = Query(..., gt=0),
+    stop_price:    float = Query(..., gt=0),
+    account_value: float = Query(1000.0, ge=100),
+):
+    """
+    VORTEX-1 Kelly-adjusted position sizing.
+    Accounts for current regime (BULL/BEAR/CHOP) — bear regime halves size.
+    Returns shares, dollar risk, dollar size, TP1/TP2 levels, and risk %.
+    """
+    from trading.vortex_strategy import (
+        calc_vortex_size, get_market_regime, MarketRegime,
+    )
+    import yfinance as yf
+
+    sym  = symbol.upper().strip()
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        vix   = float(yf.Ticker("^VIX").fast_info.last_price)
+        spy_d = yf.Ticker("SPY").history(period="300d", interval="1d")
+        regime= get_market_regime(vix, spy_d["Close"])
+        sizing= calc_vortex_size(account_value, entry_price, stop_price, regime)
+        return {"symbol": sym, "account_value": account_value, **sizing}
+
+    try:
+        return await loop.run_in_executor(_executor, _fetch)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
 # ── Trade Journal Routes ──────────────────────────────────────────────────────
 
 @app.get("/api/journal/trades")
