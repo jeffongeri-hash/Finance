@@ -33,9 +33,16 @@ logger = logging.getLogger(__name__)
 _GATEWAY = os.getenv("IBKR_GATEWAY_URL", "https://localhost:5000")
 _BASE    = f"{_GATEWAY}/v1/api"
 
-# Disable SSL verification warnings for self-signed cert
+# The local gateway uses a self-signed certificate, so TLS verification is skipped ONLY
+# when the gateway is on this machine. Any remote gateway URL is verified normally —
+# otherwise brokerage traffic could be intercepted.
+from urllib.parse import urlparse
 import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+_HOST = (urlparse(_GATEWAY).hostname or "").lower()
+_VERIFY = _HOST not in ("localhost", "127.0.0.1", "::1")
+if not _VERIFY:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 # ── HTTP helpers ───────────────────────────────────────────────────────────────
@@ -43,7 +50,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 def _get(path: str, params: Dict | None = None, timeout: int = 10) -> Any:
     url = f"{_BASE}{path}"
     try:
-        r = httpx.get(url, params=params or {}, verify=False, timeout=timeout)
+        r = httpx.get(url, params=params or {}, verify=_VERIFY, timeout=timeout)
         r.raise_for_status()
         return r.json()
     except httpx.ConnectError:
@@ -62,7 +69,7 @@ def _get(path: str, params: Dict | None = None, timeout: int = 10) -> Any:
 def _post(path: str, payload: Dict | None = None, timeout: int = 15) -> Any:
     url = f"{_BASE}{path}"
     try:
-        r = httpx.post(url, json=payload or {}, verify=False, timeout=timeout)
+        r = httpx.post(url, json=payload or {}, verify=_VERIFY, timeout=timeout)
         r.raise_for_status()
         return r.json()
     except httpx.ConnectError:
@@ -78,7 +85,7 @@ def _post(path: str, payload: Dict | None = None, timeout: int = 15) -> Any:
 def _delete(path: str, timeout: int = 10) -> Any:
     url = f"{_BASE}{path}"
     try:
-        r = httpx.delete(url, verify=False, timeout=timeout)
+        r = httpx.delete(url, verify=_VERIFY, timeout=timeout)
         r.raise_for_status()
         return r.json()
     except Exception as e:

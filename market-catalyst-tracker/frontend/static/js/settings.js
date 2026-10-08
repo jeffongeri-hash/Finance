@@ -7,7 +7,7 @@
  * after saving — only a masked preview (sk-ab…ef12) is shown.
  */
 
-import { API } from "/static/js/api.js";
+import { API, Auth } from "/static/js/api.js";
 
 // ── API extension ──────────────────────────────────────────────────────────────
 
@@ -206,7 +206,22 @@ function renderEnvPath(envFile) {
 // ── Main load ──────────────────────────────────────────────────────────────────
 
 export function initSettingsView() {
-  // nothing to wire on init — all wiring happens after render in loadSettings()
+  const input = document.getElementById("st-auth-token");
+  const msg = document.getElementById("st-auth-msg");
+  if (!input) return;
+  input.placeholder = Auth.get() ? "Token saved in this browser" : "APP_AUTH_TOKEN";
+  document.getElementById("st-auth-save").onclick = () => {
+    Auth.set(input.value.trim());
+    input.value = "";
+    input.placeholder = Auth.get() ? "Token saved in this browser" : "APP_AUTH_TOKEN";
+    msg.textContent = "Saved. Protected requests now carry the token.";
+    loadSettings();
+  };
+  document.getElementById("st-auth-clear").onclick = () => {
+    Auth.set("");
+    input.placeholder = "APP_AUTH_TOKEN";
+    msg.textContent = "Cleared.";
+  };
 }
 
 export async function loadSettings() {

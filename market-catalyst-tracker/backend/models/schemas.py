@@ -1,7 +1,8 @@
 """Pydantic response models — all API endpoints return these shapes."""
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
+from datetime import date
 
 
 class StockQuote(BaseModel):
@@ -138,3 +139,24 @@ class PredictionSnapshot(BaseModel):
     macro: List[PredictionMarket]
     geopolitical: List[PredictionMarket]
     timestamp: int
+
+
+# ── QQQ options pipeline (request bodies) ─────────────────────────────────────
+
+class QqqDecision(BaseModel):
+    approver: str = Field(..., min_length=1, max_length=64, description="Human approver name")
+    note: str = Field("", max_length=500)
+
+
+class QqqKillSwitch(BaseModel):
+    engaged: bool
+    reason: str = Field(..., min_length=3, max_length=300)
+    by: str = Field(..., min_length=1, max_length=64)
+
+
+class QqqBacktestRequest(BaseModel):
+    source: Literal["alphavantage", "csv", "synthetic"]
+    start: date
+    end: date
+    csv_dir: Optional[str] = None
+    require_macro_calendar: bool = True

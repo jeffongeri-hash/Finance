@@ -20,6 +20,13 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 # Frontend — no build step. Browser loads ES6 modules directly from /static/js/
 ```
 
+```bash
+# Tests (QQQ options pipeline: risk engine, backtester, validation, paper broker, API auth)
+cd market-catalyst-tracker/backend && python -m pytest tests
+# QQQ pipeline CLI
+python -m qqq.cli status | cycle | monitor | macro-refresh | backtest --source ...
+```
+
 The frontend is pure static HTML/CSS/ES6 modules — no npm, no bundler, no compilation. Editing `.js` files is immediately reflected on page refresh.
 
 ### IBKR Gateway (for live trading)
@@ -67,12 +74,19 @@ External APIs → backend/data/*_adapter.py
 - `ibkr_adapter.py` — Client Portal Gateway REST client. All calls go to `IBKR_GATEWAY_URL`. Session kept alive via `/tickle` (60s interval). `place_order()` handles IBKR's confirmation reply automatically.
 - `engine.py` + `paper_trader.py` + `live_trader.py` — Polymarket trading engine (separate from IBKR equities).
 
+**`backend/qqq/`** — QQQ defined-risk options research + PAPER trading (see `market-catalyst-tracker/docs/QQQ_OPTIONS.md`).
+Pipeline: market_data → screening → risk_engine → proposals → human approval → paper_broker; backtest/ → validation.
+Hard rules: `rules.py` is the single source of truth. `RiskLimits` rejects values looser than the user's rules (only `RiskLimits.what_if()` research limits can be looser, and the proposal-path `RiskEngine` refuses them). Never add an override/force path to `risk_engine.py`, never add a live-order path (`QQQ_ENV=live` raises), and never back-fill historical Greeks. Routes live in `main.py` under `/api/qqq/*`.
+
+**Auth:** all POST/DELETE routes plus account/settings GETs use `dependencies=_AUTH` (`require_auth` in `main.py`): Bearer `APP_AUTH_TOKEN`, or loopback-only when unset. New mutating routes must include it. The frontend's `api.js` wraps `fetch` to attach the token.
+
 ### Frontend Modules
 
 All in `frontend/static/js/`. Each file handles one view tab. They import from `api.js` and export an `init*()` and `load*()` function that `index.html` calls.
 
 - `api.js` — Base fetch wrapper (`apiFetch`), WebSocket factory (`createPriceStream`), and `Fmt` helper (`.pct()`, `.price()`, `.currency()`, `.bigNum()`, `.timeAgo()`).
 - `ibkr.js` — IBKR trading tab: gateway status bar, portfolio cards, positions/orders/history/performance/signals. Auto-refreshes every 30s; tickles gateway every 60s.
+- `qqq.js` — QQQ Options (Paper) tab: trend, macro deadline, risk controls, candidates + Greeks, proposals with approve/reject, paper positions, backtests/validation, research log, agent activity, alerts.
 - `dashboard.js`, `momentum.js`, `catalyst.js`, `predictions.js`, `equity.js`, `technical.js`, `trading.js`, `settings.js` — One file per view section.
 
 **Adding a new view**: add a `<section id="view-foo">` to `index.html`, a nav item, `import { initFoo, loadFoo } from "/static/js/foo.js"`, and a `case "foo": loadFoo(); break;` in the nav switch.
@@ -99,7 +113,10 @@ Set via `.env` file or the in-app Settings page (which writes `.env` and hot-rel
 | `FRED_API_KEY` | Federal Reserve macro data | Optional |
 | `NASDAQ_DATA_LINK_API_KEY` | Short interest, EOD history | Optional |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GROQ_API_KEY` | LLM for Equity AI | One required for Equity AI |
-| `POLY_PRIVATE_KEY` + `POLY_FUNDER` | Live Polymarket trading | For live prediction markets |
+| `POLY_PRIVATE_KEY` + `POLY_FUNDER` | Live Polymarket trading (also needs `POLY_LIVE_AUTOSTART=true` to start live at boot) | For live prediction markets |
+| `APP_AUTH_TOKEN` | Bearer token for trading/settings routes (unset → loopback only) | Whenever exposed beyond localhost |
+| `ALPHA_VANTAGE_API_KEY` | Premium: QQQ chains with Greeks + historical chains | For real QQQ backtests |
+| `QQQ_ENV`, `QQQ_*` | QQQ pipeline (see docs/QQQ_OPTIONS.md) | Optional |
 
 yfinance, FDA API, SEC EDGAR, and ClinicalTrials.gov need no keys.
 

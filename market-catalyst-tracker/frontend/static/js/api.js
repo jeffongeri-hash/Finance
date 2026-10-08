@@ -5,6 +5,50 @@
 
 const API_BASE = window.location.origin;
 
+/* ── Auth token ───────────────────────────────────────────────────────────────
+   Protected routes (trading, orders, settings, account data) require
+   "Authorization: Bearer <APP_AUTH_TOKEN>". The token is entered once on the
+   Settings page and kept in this browser's localStorage only. Every same-origin
+   fetch() gets the header automatically, including raw fetch calls in view modules.
+─────────────────────────────────────────────────────────────────────────────── */
+const AUTH_KEY = "mct_auth_token";
+
+export const Auth = {
+  get() { try { return localStorage.getItem(AUTH_KEY) || ""; } catch { return ""; } },
+  set(v) { try { v ? localStorage.setItem(AUTH_KEY, v) : localStorage.removeItem(AUTH_KEY); } catch { /* private mode */ } },
+};
+
+if (!window.__mctFetchWrapped) {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init = {}) => {
+    const url = typeof input === "string" ? input : (input && input.url) || String(input);
+    const sameOrigin = url.startsWith("/") || url.startsWith(location.origin);
+    const token = Auth.get();
+    if (sameOrigin && token) {
+      const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+      if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+      init = { ...init, headers };
+    }
+    return nativeFetch(input, init);
+  };
+  window.__mctFetchWrapped = true;
+}
+
+async function _send(method, path, body) {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { data: null, error: data.detail || `HTTP ${res.status}`, status: res.status };
+    return { data, error: null, status: res.status };
+  } catch (e) {
+    return { data: null, error: e.message };
+  }
+}
+
 async function _get(path, params = {}) {
   const url = new URL(`${API_BASE}${path}`);
   Object.entries(params).forEach(([k, v]) => v !== undefined && url.searchParams.set(k, v));
@@ -23,6 +67,7 @@ async function _get(path, params = {}) {
 export const API = {
   // Internal helpers used by extension modules
   _fetch: (path, params) => _get(path, params),
+  _postJson: (path, body = {}) => _send("POST", path, body),
   _post:  async (path) => {
     try {
       const res = await fetch(`${API_BASE}${path}`, { method: "POST" });

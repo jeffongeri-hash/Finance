@@ -1275,3 +1275,17 @@ details > summary::-webkit-details-marker {
 /* Account buttons */
 .ib-acct-btn      { font-family:var(--font-mono); font-size:11px; }
 .ib-acct-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+
+/* ── QQQ options view ─────────────────────────────────────────────────────── */
+.qq-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.qq-muted { font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+.qq-warn { font-size: 11px; color: var(--amber); background: var(--amber-dim); border-radius: var(--radius-sm);
+           padding: 6px 8px; margin-top: 6px; line-height: 1.5; }
+.qq-big { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+.qq-kv td:first-child { color: var(--text-muted); }
+.qq-kv td:last-child { text-align: right; font-family: var(--font-mono); }
+.qq-scroll { overflow: auto; max-width: 100%; }
+.qq-prop { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 8px; font-size: 12px; }
+.qq-prop ul { margin: 4px 0 4px 18px; padding: 0; }
+.qq-logline { font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--border); }
+@media (max-width: 1100px) { #view-qqq .grid-4, #view-qqq .grid-2 { grid-template-columns: 1fr; } }

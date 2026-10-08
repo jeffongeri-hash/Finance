@@ -35,11 +35,9 @@ Object.assign(API, {
   liveBalance:       () => API._fetch("/api/trading/live/balance"),
   liveOrders:        () => API._fetch("/api/trading/live/orders"),
   liveCancelAll:     () => API._post("/api/trading/live/cancel-all"),
-  liveEnable:        (pk, funder, host) => {
-    const params = new URLSearchParams({ private_key: pk, funder });
-    if (host) params.set("host", host);
-    return API._post(`/api/trading/live/enable?${params}`);
-  },
+  // Credentials go in the JSON body — never the query string (it is logged).
+  liveEnable:        (pk, funder, host) =>
+    API._postJson("/api/trading/live/enable", { private_key: pk, funder, host: host || "" }),
   liveDisable:       () => API._post("/api/trading/live/disable"),
 });
 

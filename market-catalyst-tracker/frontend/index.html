@@ -121,6 +121,14 @@
       <span class="sidebar-badge" style="background:#6366f1;font-size:9px" id="ibkr-nav-dot"></span>
     </button>
 
+    <button class="nav-item" data-view="qqq">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 2l9 4v6c0 5-3.8 9.4-9 10-5.2-.6-9-5-9-10V6l9-4z"/>
+        <polyline points="8 12 11 15 16 9"/>
+      </svg>
+      QQQ Options (Paper)
+    </button>
+
     <div class="nav-section-label">Analysis</div>
 
     <button class="nav-item" data-view="why">
@@ -1066,7 +1074,76 @@
     </section>
 
     <!-- ── SETTINGS VIEW ────────────────────────────────────────────────────── -->
+    <section id="view-qqq" class="view">
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-header"><span class="card-title">QQQ Defined-Risk Options — Research &amp; Paper Trading</span>
+          <button class="card-action" onclick="window._qqqRefresh && window._qqqRefresh()">Refresh</button></div>
+        <div id="qq-controls"><div class="loading-text">Loading…</div></div>
+        <div class="qq-muted" style="margin-top:8px">Every entry and exit is a proposal that needs your approval and goes to the
+          PAPER broker only. No live-order path exists. Nothing here is evidence of profitability unless an
+          independent out-of-sample validation says APPROVED on real historical option data.</div>
+      </div>
+      <div class="grid-4" style="margin-bottom:12px">
+        <div class="card"><div class="card-header"><span class="card-title">QQQ &amp; Trend</span></div><div id="qq-market"></div></div>
+        <div class="card"><div class="card-header"><span class="card-title">Next Macro Event</span></div><div id="qq-macro"></div></div>
+        <div class="card"><div class="card-header"><span class="card-title">Risk Controls</span></div><div id="qq-limits"></div></div>
+        <div class="card"><div class="card-header"><span class="card-title">Paper Account</span></div><div id="qq-paper"></div></div>
+      </div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-header"><span class="card-title">Last Screening Cycle &amp; Option Candidates</span></div>
+        <div id="qq-cycle"></div><div id="qq-candidates" style="margin-top:8px"></div>
+      </div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-header"><span class="card-title">Trade Proposals (entries &amp; exits)</span></div>
+        <div id="qq-proposals"></div>
+      </div>
+      <div class="grid-2" style="margin-bottom:12px">
+        <div class="card"><div class="card-header"><span class="card-title">Paper Positions</span></div><div id="qq-positions"></div></div>
+        <div class="card"><div class="card-header"><span class="card-title">Paper Orders</span></div><div id="qq-orders"></div></div>
+      </div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-header"><span class="card-title">Backtests &amp; Independent Validation</span></div>
+        <form id="qq-bt-form" class="qq-row" style="margin-bottom:8px">
+          <select id="qq-bt-source" class="input-field" style="width:auto">
+            <option value="alphavantage">Alpha Vantage historical (premium)</option>
+            <option value="csv">CSV directory</option>
+            <option value="synthetic">Synthetic (pipeline check only)</option>
+          </select>
+          <input id="qq-bt-start" type="date" class="input-field" style="width:auto" value="2023-01-03" required>
+          <input id="qq-bt-end" type="date" class="input-field" style="width:auto" value="2025-12-31" required>
+          <input id="qq-bt-csv" type="text" class="input-field" style="width:200px" placeholder="CSV dir (server path)">
+          <label class="qq-muted"><input id="qq-bt-nomacro" type="checkbox"> disable macro filter (not approvable)</label>
+          <button class="btn-xs" type="submit">Run backtest</button>
+          <span id="qq-bt-msg" class="qq-muted"></span>
+        </form>
+        <div id="qq-backtests"></div>
+      </div>
+      <div class="grid-2" style="margin-bottom:12px">
+        <div class="card"><div class="card-header"><span class="card-title">Strategy Hypotheses</span></div><div id="qq-hypotheses"></div></div>
+        <div class="card"><div class="card-header"><span class="card-title">Research Log (versioned)</span></div><div id="qq-log" class="qq-scroll" style="max-height:360px"></div></div>
+      </div>
+      <div class="grid-2">
+        <div class="card"><div class="card-header"><span class="card-title">Agent Activity</span></div><div id="qq-activity" class="qq-scroll" style="max-height:360px"></div></div>
+        <div class="card"><div class="card-header"><span class="card-title">Alerts</span></div><div id="qq-alerts" class="qq-scroll" style="max-height:360px"></div></div>
+      </div>
+    </section>
+
     <section id="view-settings" class="view">
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header"><span class="card-title">Dashboard Access Token</span></div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+          Trading, order, account and settings routes require the server's <code>APP_AUTH_TOKEN</code>.
+          Paste it here once; it is stored only in this browser (localStorage) and sent as a Bearer header.
+          Without a token, protected routes only work from the same machine (loopback).
+        </div>
+        <div class="qq-row">
+          <input id="st-auth-token" type="password" class="input-field" style="width:320px" placeholder="APP_AUTH_TOKEN" autocomplete="off">
+          <button class="btn-xs" id="st-auth-save">Save token</button>
+          <button class="btn-xs" id="st-auth-clear">Clear</button>
+          <span id="st-auth-msg" class="qq-muted"></span>
+        </div>
+      </div>
 
       <div class="card" style="margin-bottom:16px">
         <div class="card-header">
@@ -1116,6 +1193,7 @@ import { initTechnicalView, loadTechnical } from "/static/js/technical.js";
 import { initEquityView, loadEquity } from "/static/js/equity.js";
 import { initIbkrView, loadIbkrDashboard } from "/static/js/ibkr.js";
 import { initSettingsView, loadSettings } from "/static/js/settings.js";
+import { initQqqView, loadQqq } from "/static/js/qqq.js";
 import { API, Fmt, changeClass, sentimentBadge } from "/static/js/api.js";
 
 window._tradingRefresh = tradingRefreshStats;
@@ -1147,6 +1225,7 @@ function switchView(viewId) {
     case "equity":      loadEquity(); break;
     case "ibkr":        loadIbkrDashboard(); break;
     case "settings":    loadSettings(); break;
+    case "qqq":         loadQqq(); break;
   }
 }
 
@@ -1156,6 +1235,8 @@ initTechnicalView();
 initEquityView();
 initIbkrView();
 initSettingsView();
+initQqqView();
+window._qqqRefresh = loadQqq;
 
 // expose settings refresh for the card action button
 window._settingsRefresh = loadSettings;

@@ -1,0 +1,8 @@
+{
+  "_readme": "Fill from OFFICIAL schedules only. Every event and holiday needs a 'source' URL. Set verified_through per kind to the last date you checked. Until every kind is verified through a spread's expiration, the risk engine rejects that spread. FOMC: federalreserve.gov/monetarypolicy/fomccalendars.htm (statement 14:00 ET, use -04:00/-05:00 offsets). CPI/NFP: bls.gov schedules (08:30 ET) or run `python -m qqq.cli macro-refresh` with FRED_API_KEY set.",
+  "verified_from": {"CPI": null, "FOMC": null, "NFP": null},
+  "verified_through": {"CPI": null, "FOMC": null, "NFP": null},
+  "events": [],
+  "market_holidays": [],
+  "early_closes": []
+}

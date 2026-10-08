@@ -11,6 +11,7 @@ load_dotenv()
 FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
 FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
 NASDAQ_DATA_LINK_API_KEY: str = os.getenv("NASDAQ_DATA_LINK_API_KEY", "")
+ALPHA_VANTAGE_API_KEY: str = os.getenv("ALPHA_VANTAGE_API_KEY", "")
 
 # ── Interactive Brokers Client Portal Gateway ──────────────────────────────────
 # No API key needed — auth happens via browser login at the gateway URL.

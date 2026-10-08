@@ -18,7 +18,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+import hmac
+
+from fastapi import Body, Depends, FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -79,6 +81,7 @@ from models.schemas import (
     StockQuote, Candle, NewsItem, MarketOverview,
     NewsCorrelation, CatalystEvent, MomentumCandidate, ScanResult,
     PredictionMarket, EnrichedCatalyst, PredictionSnapshot,
+    QqqDecision, QqqKillSwitch, QqqBacktestRequest,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s │ %(name)s │ %(message)s")
@@ -90,12 +93,43 @@ app = FastAPI(
     version="1.0.0",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS: the frontend is served same-origin, so no cross-origin access is granted by
+# default. Set CORS_ALLOW_ORIGINS="https://a.example,https://b.example" to allow others.
+_cors = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
+if _cors:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+
+
+# ── Authentication for trading, account and settings routes ─────────────────
+# APP_AUTH_TOKEN set   → requests must send "Authorization: Bearer <token>".
+# APP_AUTH_TOKEN unset → only direct loopback clients are allowed, and never on
+#                        Railway. Set a token whenever the app is reachable from
+#                        anything other than this machine (incl. a local reverse proxy).
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def require_auth(request: Request) -> str:
+    token = os.getenv("APP_AUTH_TOKEN", "")
+    if token:
+        header = request.headers.get("authorization", "")
+        supplied = header[7:] if header.lower().startswith("bearer ") else ""
+        if supplied and hmac.compare_digest(supplied.encode(), token.encode()):
+            return "token"
+        raise HTTPException(status_code=401, detail="Authentication required (APP_AUTH_TOKEN)")
+    on_railway = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_SERVICE_NAME"))
+    host = request.client.host if request.client else ""
+    if not on_railway and host in _LOOPBACK:
+        return "loopback"
+    raise HTTPException(status_code=401,
+                        detail="APP_AUTH_TOKEN is not configured; protected routes are loopback-only")
+
+
+_AUTH = [Depends(require_auth)]
 
 _executor = ThreadPoolExecutor(max_workers=4)   # reduced for 512MB Railway container
 
@@ -549,14 +583,17 @@ async def startup():
     asyncio.create_task(
         _stream.start_ticker(INDICES + SECTORS[:5], interval=20.0)
     )
-    # Create trading engine — auto-enables live mode if credentials are set in .env
+    # Create trading engine. Live mode is OPT-IN: credentials alone no longer switch
+    # real-money trading on at boot — POLY_LIVE_AUTOSTART=true is also required.
+    autostart_live = os.getenv("POLY_LIVE_AUTOSTART", "").lower() == "true"
     create_engine(
         initial_balance = 10_000.0,
         private_key     = POLY_PRIVATE_KEY,
         funder          = POLY_FUNDER,
         poly_host       = POLY_HOST,
-        live_mode       = bool(POLY_PRIVATE_KEY and POLY_FUNDER),
+        live_mode       = bool(POLY_PRIVATE_KEY and POLY_FUNDER and autostart_live),
     )
+    _qqq_startup()
     # Start continuous backtester — runs every 30 min, results available immediately
     runner = create_backtest_runner(interval_s=1800)
     await runner.start()
@@ -564,7 +601,7 @@ async def startup():
 
 # ── Trading Engine Routes ─────────────────────────────────────────────────────
 
-@app.post("/api/trading/start")
+@app.post("/api/trading/start", dependencies=_AUTH)
 async def trading_start(balance: float = 10_000.0):
     """
     Start the automated paper trading engine.
@@ -577,7 +614,7 @@ async def trading_start(balance: float = 10_000.0):
     return {"status": "running", "balance": engine.trader.balance, "mode": "paper"}
 
 
-@app.post("/api/trading/stop")
+@app.post("/api/trading/stop", dependencies=_AUTH)
 async def trading_stop():
     """Stop the trading engine."""
     engine = get_engine()
@@ -654,12 +691,8 @@ async def live_status():
     }
 
 
-@app.post("/api/trading/live/enable")
-async def live_enable(
-    private_key: str = Query(..., description="Polygon wallet private key (0x…)"),
-    funder:      str = Query(..., description="Polymarket funder address (0x…)"),
-    host:        str = Query("https://clob.polymarket.com", description="CLOB host"),
-):
+@app.post("/api/trading/live/enable", dependencies=_AUTH)
+async def live_enable(payload: Dict[str, str] = Body(default={})):
     """
     Switch the active trader to LiveTrader (real CLOB orders, real USDC).
 
@@ -668,7 +701,15 @@ async def live_enable(
     before enabling.
 
     The paper trader continues running as a shadow for comparison.
+
+    Credentials are taken from the JSON body (never the query string, which ends up in
+    access logs and browser history) or, if omitted, from POLY_PRIVATE_KEY / POLY_FUNDER.
     """
+    private_key = (payload.get("private_key") or "").strip() or os.getenv("POLY_PRIVATE_KEY", "")
+    funder = (payload.get("funder") or "").strip() or os.getenv("POLY_FUNDER", "")
+    host = (payload.get("host") or "").strip() or os.getenv("POLY_HOST", "https://clob.polymarket.com")
+    if not private_key or not funder:
+        raise HTTPException(status_code=400, detail="private_key and funder are required")
     engine = get_engine()
     if not engine:
         raise HTTPException(status_code=503, detail="Engine not initialised. POST /api/trading/start first.")
@@ -694,7 +735,7 @@ async def live_enable(
     }
 
 
-@app.post("/api/trading/live/disable")
+@app.post("/api/trading/live/disable", dependencies=_AUTH)
 async def live_disable():
     """
     Switch back to paper trading. Any open live orders remain open on the CLOB
@@ -712,7 +753,7 @@ async def live_disable():
     }
 
 
-@app.get("/api/trading/live/balance")
+@app.get("/api/trading/live/balance", dependencies=_AUTH)
 async def live_balance():
     """Fetch real-time USDC balance from the Polymarket CLOB."""
     engine = get_engine()
@@ -726,7 +767,7 @@ async def live_balance():
     }
 
 
-@app.get("/api/trading/live/orders")
+@app.get("/api/trading/live/orders", dependencies=_AUTH)
 async def live_orders():
     """Pending (unconfirmed) orders sitting on the Polymarket CLOB."""
     engine = get_engine()
@@ -740,7 +781,7 @@ async def live_orders():
     }
 
 
-@app.post("/api/trading/live/cancel-all")
+@app.post("/api/trading/live/cancel-all", dependencies=_AUTH)
 async def live_cancel_all():
     """
     Cancel all pending GTC orders on the CLOB and refund reserved balance.
@@ -806,7 +847,7 @@ async def backtest_results(
     return {"results": rows, "count": len(rows), "strategies": list(STRATEGY_REGISTRY.keys())}
 
 
-@app.post("/api/backtest/run")
+@app.post("/api/backtest/run", dependencies=_AUTH)
 async def backtest_run_now():
     """
     Trigger an immediate backtest sweep (non-blocking — runs in background).
@@ -1231,7 +1272,7 @@ async def equity_agents():
     }
 
 
-@app.post("/api/equity/analyze")
+@app.post("/api/equity/analyze", dependencies=_AUTH)
 async def equity_analyze(
     tickers:    str  = Query(...,         description="Comma-separated tickers e.g. AAPL,NVDA,TSLA"),
     analysts:   str  = Query("",          description="Comma-separated agent keys (empty = all agents)"),
@@ -1288,7 +1329,7 @@ async def equity_analyze(
     return result
 
 
-@app.get("/api/equity/analyze/{ticker}")
+@app.get("/api/equity/analyze/{ticker}", dependencies=_AUTH)
 async def equity_analyze_single(
     ticker:   str,
     analysts: str  = Query("",    description="Comma-separated agent keys (empty = all)"),
@@ -1342,7 +1383,7 @@ async def ibkr_status():
     return {**status, "accounts": accounts}
 
 
-@app.get("/api/ibkr/portfolio")
+@app.get("/api/ibkr/portfolio", dependencies=_AUTH)
 async def ibkr_portfolio(account_id: str = Query(..., description="IBKR account ID e.g. U1234567")):
     """
     Full portfolio snapshot: net liquidation, cash, buying power, open positions, P&L.
@@ -1358,7 +1399,7 @@ async def ibkr_portfolio(account_id: str = Query(..., description="IBKR account 
         raise HTTPException(status_code=500, detail=f"IBKR error: {e}")
 
 
-@app.get("/api/ibkr/orders")
+@app.get("/api/ibkr/orders", dependencies=_AUTH)
 async def ibkr_orders():
     """All open/pending orders across accounts."""
     from trading.ibkr_adapter import get_open_orders
@@ -1384,7 +1425,7 @@ async def ibkr_quote(symbol: str):
         raise HTTPException(status_code=503, detail=str(e))
 
 
-@app.post("/api/ibkr/order")
+@app.post("/api/ibkr/order", dependencies=_AUTH)
 async def ibkr_place_order(
     account_id:  str   = Query(..., description="IBKR account ID"),
     symbol:      str   = Query(..., description="Ticker e.g. AAPL"),
@@ -1430,7 +1471,7 @@ async def ibkr_place_order(
         raise HTTPException(status_code=500, detail=f"Order error: {e}")
 
 
-@app.delete("/api/ibkr/order/{order_id}")
+@app.delete("/api/ibkr/order/{order_id}", dependencies=_AUTH)
 async def ibkr_cancel_order(
     order_id:   str = ...,
     account_id: str = Query(..., description="IBKR account ID"),
@@ -1445,7 +1486,7 @@ async def ibkr_cancel_order(
         raise HTTPException(status_code=503, detail=str(e))
 
 
-@app.post("/api/ibkr/tickle")
+@app.post("/api/ibkr/tickle", dependencies=_AUTH)
 async def ibkr_tickle():
     """Keep the gateway session alive. Call every 60 seconds from the frontend."""
     from trading.ibkr_adapter import tickle
@@ -1505,7 +1546,7 @@ async def ibkr_strategy_evaluate(symbol: str):
     return sig.to_dict()
 
 
-@app.post("/api/ibkr/strategy/size")
+@app.post("/api/ibkr/strategy/size", dependencies=_AUTH)
 async def ibkr_strategy_size(
     symbol:        str   = Query(...),
     account_id:    str   = Query(...),
@@ -1528,7 +1569,7 @@ async def ibkr_strategy_size(
 
 # ── Trade Journal Routes ──────────────────────────────────────────────────────
 
-@app.get("/api/journal/trades")
+@app.get("/api/journal/trades", dependencies=_AUTH)
 async def journal_trades(
     limit:       int            = Query(100, ge=1, le=500),
     symbol:      Optional[str]  = Query(None),
@@ -1544,7 +1585,7 @@ async def journal_trades(
     return {"trades": trades, "count": len(trades)}
 
 
-@app.get("/api/journal/open")
+@app.get("/api/journal/open", dependencies=_AUTH)
 async def journal_open(account_id: str = Query("")):
     """All currently open (un-exited) journal positions."""
     from trading.trade_journal import get_open_trades
@@ -1553,7 +1594,7 @@ async def journal_open(account_id: str = Query("")):
     return {"trades": trades, "count": len(trades)}
 
 
-@app.get("/api/journal/stats")
+@app.get("/api/journal/stats", dependencies=_AUTH)
 async def journal_stats(account_id: str = Query("")):
     """
     Performance statistics and signal accuracy (learning loop).
@@ -1566,7 +1607,7 @@ async def journal_stats(account_id: str = Query("")):
     return stats
 
 
-@app.post("/api/journal/entry")
+@app.post("/api/journal/entry", dependencies=_AUTH)
 async def journal_record_entry(
     symbol:       str   = Query(...),
     entry_price:  float = Query(...),
@@ -1599,7 +1640,7 @@ async def journal_record_entry(
     return {"trade_id": trade_id, "symbol": sym, "entry_price": entry_price, "shares": shares}
 
 
-@app.post("/api/journal/exit/{trade_id}")
+@app.post("/api/journal/exit/{trade_id}", dependencies=_AUTH)
 async def journal_record_exit(
     trade_id:    int,
     exit_price:  float = Query(...),
@@ -1616,7 +1657,7 @@ async def journal_record_exit(
     return trade
 
 
-@app.get("/api/journal/dashboard")
+@app.get("/api/journal/dashboard", dependencies=_AUTH)
 async def journal_dashboard(account_id: str = Query("")):
     """
     Combined IBKR + journal dashboard payload.
@@ -1911,6 +1952,13 @@ _KEY_DEFS = {
         "placeholder": "Federal Reserve macro indicators (yield curve, CPI, etc.)",
         "docs_url":    "https://fred.stlouisfed.org/docs/api/api_key.html",
     },
+    "ALPHA_VANTAGE_API_KEY": {
+        "group":       "Market Data",
+        "label":       "Alpha Vantage API Key (premium)",
+        "sensitive":   True,
+        "placeholder": "QQQ option chains with Greeks + historical chains for backtests",
+        "docs_url":    "https://www.alphavantage.co/premium/",
+    },
     "NASDAQ_DATA_LINK_API_KEY": {
         "group":       "Market Data",
         "label":       "Nasdaq Data Link API Key",
@@ -2074,6 +2122,7 @@ def _reload_config() -> None:
         "FINNHUB_API_KEY":            getattr(cfg, "FINNHUB_API_KEY", ""),
         "FRED_API_KEY":               getattr(cfg, "FRED_API_KEY", ""),
         "NASDAQ_DATA_LINK_API_KEY":   getattr(cfg, "NASDAQ_DATA_LINK_API_KEY", ""),
+        "ALPHA_VANTAGE_API_KEY":      getattr(cfg, "ALPHA_VANTAGE_API_KEY", ""),
         "POLY_PRIVATE_KEY":           getattr(cfg, "POLY_PRIVATE_KEY", ""),
         "POLY_FUNDER":                getattr(cfg, "POLY_FUNDER", ""),
         "POLY_HOST":                  getattr(cfg, "POLY_HOST", ""),
@@ -2092,7 +2141,7 @@ def _reload_config() -> None:
             os.environ[k] = v
 
 
-@app.get("/api/settings")
+@app.get("/api/settings", dependencies=_AUTH)
 async def get_settings():
     """
     Return all configurable keys with their current status.
@@ -2135,7 +2184,7 @@ async def get_settings():
     }
 
 
-@app.post("/api/settings")
+@app.post("/api/settings", dependencies=_AUTH)
 async def save_settings(payload: Dict[str, str]):
     """
     Save one or more API keys to the .env file.
@@ -2168,7 +2217,7 @@ async def save_settings(payload: Dict[str, str]):
     }
 
 
-@app.delete("/api/settings/{key}")
+@app.delete("/api/settings/{key}", dependencies=_AUTH)
 async def delete_setting(key: str):
     """Remove a key from the .env file."""
     if key not in _KEY_DEFS:
@@ -2225,3 +2274,180 @@ async def settings_system_status():
         },
         "timestamp": int(time.time()),
     }
+
+
+# ── QQQ Defined-Risk Options Pipeline (/api/qqq/*) ────────────────────────────
+# Research + PAPER trading only. There is no live-order route. Every entry/exit is
+# a proposal; approval re-runs the deterministic risk engine before paper submission.
+
+_qqq = None
+
+
+def _qqq_startup() -> None:
+    global _qqq
+    try:
+        from qqq.orchestrator import Orchestrator
+        _qqq = Orchestrator()
+        _qqq.startup()
+        if os.getenv("QQQ_SCHEDULER_ENABLED", "").lower() == "true":
+            asyncio.get_event_loop().create_task(
+                _qqq.start_scheduler(int(os.getenv("QQQ_SCHEDULER_INTERVAL_S", "300"))))
+    except Exception as exc:          # pipeline unavailable → routes return 503, no trading
+        logger.exception("QQQ pipeline failed to start: %s", exc)
+        _qqq = None
+
+
+@app.on_event("shutdown")
+async def _qqq_shutdown():
+    if _qqq:
+        await _qqq.shutdown()
+
+
+def _q():
+    if _qqq is None:
+        raise HTTPException(status_code=503, detail="QQQ pipeline not initialised (see server log)")
+    return _qqq
+
+
+async def _run(fn, *args, **kwargs):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_executor, lambda: fn(*args, **kwargs))
+
+
+@app.get("/api/qqq/status")
+async def qqq_status():
+    return await _run(_q().status)
+
+
+@app.get("/api/qqq/cycle/latest")
+async def qqq_latest_cycle():
+    rows = _q().store.list("cycles", 1)
+    return rows[0] if rows else {"outcome": None, "message": "No cycle has run yet"}
+
+
+@app.post("/api/qqq/cycle", dependencies=_AUTH)
+async def qqq_run_cycle():
+    """Market data → screening → risk engine → (maybe) one proposal. Never executes."""
+    return await _run(_q().run_cycle, "api")
+
+
+@app.post("/api/qqq/monitor", dependencies=_AUTH)
+async def qqq_monitor():
+    """Re-check open paper positions for exit triggers and retry working paper orders."""
+    return await _run(_q().monitor, "api")
+
+
+@app.get("/api/qqq/monitor/latest")
+async def qqq_monitor_latest():
+    return _q().store.kv_get("last_monitor") or {}
+
+
+@app.get("/api/qqq/proposals")
+async def qqq_proposals(limit: int = Query(50, le=500)):
+    rows = _q().store.list("proposals", limit)
+    for r in rows:
+        r.pop("spread_model", None)
+    return rows
+
+
+@app.post("/api/qqq/proposals/{proposal_id}/approve", dependencies=_AUTH)
+async def qqq_approve(proposal_id: str, body: QqqDecision):
+    try:
+        return await _run(_q().approve, proposal_id, f"human:{body.approver}", body.note)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/qqq/proposals/{proposal_id}/reject", dependencies=_AUTH)
+async def qqq_reject(proposal_id: str, body: QqqDecision):
+    try:
+        return await _run(_q().reject, proposal_id, f"human:{body.approver}", body.note)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="proposal not found")
+
+
+@app.get("/api/qqq/paper/positions")
+async def qqq_positions():
+    return [p.model_dump(mode="json") for p in _q().broker.positions()]
+
+
+@app.get("/api/qqq/paper/orders")
+async def qqq_orders():
+    return [o.model_dump(mode="json") for o in _q().broker.orders()]
+
+
+@app.post("/api/qqq/paper/orders/{client_order_id}/cancel", dependencies=_AUTH)
+async def qqq_cancel(client_order_id: str, body: QqqDecision):
+    o = _q().store.get("orders", client_order_id)
+    if not o:
+        raise HTTPException(status_code=404, detail="order not found")
+    return _q().broker.cancel(client_order_id, f"human:{body.approver}").model_dump(mode="json")
+
+
+@app.post("/api/qqq/kill-switch", dependencies=_AUTH)
+async def qqq_kill_switch(body: QqqKillSwitch):
+    o = _q()
+    if body.engaged:
+        return o.kill.engage(body.reason, f"human:{body.by}")
+    ok, issues = o.broker.reconcile()
+    try:
+        return o.kill.disengage(body.reason, f"human:{body.by}", ok)
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=f"{e}: {issues}")
+
+
+@app.post("/api/qqq/reconcile", dependencies=_AUTH)
+async def qqq_reconcile():
+    ok, issues = _q().broker.reconcile()
+    return {"ok": ok, "issues": issues}
+
+
+@app.post("/api/qqq/backtest", dependencies=_AUTH)
+async def qqq_backtest(body: QqqBacktestRequest):
+    try:
+        return await _run(_q().run_backtest, body.source, body.start, body.end,
+                          csv_dir=body.csv_dir, require_macro=body.require_macro_calendar)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Backtest not run: {e}")
+
+
+@app.get("/api/qqq/backtests")
+async def qqq_backtests(limit: int = Query(10, le=100)):
+    from qqq.orchestrator import _brief
+    from qqq.models import BacktestReport
+    return [_brief(BacktestReport(**r)) for r in _q().store.list("backtests", limit)]
+
+
+@app.get("/api/qqq/validations")
+async def qqq_validations(limit: int = Query(20, le=200)):
+    return _q().store.list("validations", limit)
+
+
+@app.get("/api/qqq/research")
+async def qqq_research(limit: int = Query(50, le=500)):
+    o = _q()
+    return {"hypotheses": o.research.hypotheses(), "log": o.store.list("research_log", limit),
+            "change_proposals": o.store.list("change_proposals", limit)}
+
+
+@app.post("/api/qqq/review", dependencies=_AUTH)
+async def qqq_review():
+    return await _run(_q().review.analyze)
+
+
+@app.get("/api/qqq/activity")
+async def qqq_activity(limit: int = Query(100, le=1000)):
+    return _q().store.list("activity", limit)
+
+
+@app.get("/api/qqq/alerts")
+async def qqq_alerts(limit: int = Query(50, le=500)):
+    return _q().store.list("alerts", limit)
+
+
+@app.get("/api/qqq/audit", dependencies=_AUTH)
+async def qqq_audit(limit: int = Query(100, le=1000)):
+    o = _q()
+    return {"chain_ok": o.store.verify_audit(), "entries": o.store.audit_tail(limit)}
